@@ -20,9 +20,12 @@ For Linux numbers, use `/usr/bin/time -v` instead of `/usr/bin/time -l` and subs
 ## Get the dataset
 
 ```bash
-# ClickBench's hits_1.parquet (~408 MB on disk, includes 1M rows)
-curl -O https://datasets.clickhouse.com/hits_compatible/athena/partitions/hits_1.parquet
-# Or use any Parquet file with predominantly flat columns. Substitute path
+# Easiest: fetch hits_1.parquet (+ convert to hits_1.he) via the helper.
+scripts/fetch-fixtures.sh
+
+# Or download ClickBench's hits_1.parquet directly (~408 MB, 1M rows × 105 cols):
+curl -O https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet
+# Or use any Parquet file with predominantly flat columns; substitute the path
 # below as needed.
 ```
 

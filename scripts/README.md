@@ -3,6 +3,26 @@
 Reproducible benchmark tooling. Not part of the published crate (excluded
 from `cargo publish`).
 
+## `fetch-fixtures.sh` — download the optional test fixtures
+
+None of the large fixtures are committed (they're gitignored). This script
+fetches the **ClickBench** `hits_1.parquet` partition (public, ~1 M rows ×
+105 cols) and converts it to `hits_1.he`, so you can run the Arrow examples
+and the `HELIUM_PARQUET_PATH`-gated tests/reports against real data.
+
+```bash
+cargo build --release --features cli   # needed for the .he conversion
+scripts/fetch-fixtures.sh
+# → hits_1.parquet + hits_1.he at the crate root
+HELIUM_PARQUET_PATH=hits_1.parquet cargo test --release -- --nocapture
+```
+
+Source URL (public):
+`https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet`
+
+The **DoNext** 5G/4G real-data set is *not* fetched by this script (~4.5 GB,
+CC BY 4.0) — see `donext_benchmark.sh` below and the DOI.
+
 ## `donext_benchmark.sh` — real-data compression benchmark
 
 Runs an apples-to-apples compression comparison on a real telecom CSV:
