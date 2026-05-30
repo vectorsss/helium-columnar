@@ -94,10 +94,12 @@ RAW=$(wc -c < "$CSV" | tr -d ' ')
 NROWS=$(($(wc -l < "$CSV" | tr -d ' ') - 1))
 NCOLS=$(head -1 "$CSV" | awk -F"$DELIM" '{print NF}')
 
-echo "=== DoNext compression benchmark ==="
-echo "source : $SRC"
-echo "rows   : $NROWS   cols: $NCOLS   delimiter: '$DELIM'"
-echo
+if [[ "${DONEXT_TSV:-0}" != "1" ]]; then
+    echo "=== DoNext compression benchmark ==="
+    echo "source : $SRC"
+    echo "rows   : $NROWS   cols: $NCOLS   delimiter: '$DELIM'"
+    echo
+fi
 
 ratio() { awk "BEGIN{printf \"%.2fx\", $1/$2}"; }
 pct()   { awk "BEGIN{printf \"%+.0f%%\", (1-$1/$2)*100}"; }
@@ -127,6 +129,14 @@ fi
 
 # --- round-trip integrity ---
 "$HELIUM" verify "$WORK/opt.he" >/dev/null && RT="OK" || RT="FAILED"
+
+# --- machine-readable single line (used by donext_benchmark_all.sh) ---
+if [[ "${DONEXT_TSV:-0}" == "1" ]]; then
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$SRC" "$NROWS" "$NCOLS" "$RAW" "$ZST" "${AV_DEFLATE:-0}" "${AV_ZSTD:-0}" "$HD" "$HO" "$RT"
+    [[ "$RT" == "OK" ]] || exit 1
+    exit 0
+fi
 
 # --- report ---
 printf "%-22s %14s %10s %12s\n" "format" "bytes" "vs raw" "vs csv.zst"

@@ -87,6 +87,31 @@ differentiator, beating both `csv.zst` (+30%) and the `avro+zstd` 5G
 storage anchor (+42%) on this real telemetry data. See
 [`../docs/PERFORMANCE.md`](../docs/PERFORMANCE.md) for the broader picture.
 
+## `donext_benchmark_all.sh` — comprehensive (all categories × types)
+
+Runs `donext_benchmark.sh` over **every** DoNext data CSV (H-Bahn / Mobile /
+static × cell / latency / iperf / datarate / neighboring) and prints one
+combined table — so you can see how helium fares across the whole dataset,
+not just `cell_data`.
+
+```bash
+cargo build --release --features cli
+
+# Point it at a local DoNext download (the dir with H-Bahn/, Mobile/, static/):
+scripts/donext_benchmark_all.sh /path/to/DoNext 100000
+
+# …or let it download every *_data.csv (~4.8 GB) from Dataverse first:
+scripts/donext_benchmark_all.sh --fetch-all 100000
+```
+
+Args: `<dataset_dir> [max_rows]` or `--fetch-all [max_rows]` (default 100000
+rows per file). The combined table prints to stdout and is saved to
+`target/donext-benchmark-all.md`. Per-file the takeaway is consistent: helium
+**optimized** beats the `avro+zstd` 5G-storage anchor on every file type, and
+beats `csv.zst` once there are enough rows to amortize per-column framing
+(≥ ~100k; at small caps the lighter formats can win — see *When NOT to use
+Helium* in the README).
+
 ## `csv_to_avro.py`
 
 Helper used by the benchmark to encode a CSV as Avro, mirroring a
