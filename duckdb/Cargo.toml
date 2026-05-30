@@ -1,0 +1,28 @@
+[package]
+name = "helium-duckdb"
+version = "0.1.0"
+edition = "2024"
+description = "DuckDB loadable extension — read_he(path) table function for Helium .he files"
+license = "MIT"
+repository = "https://github.com/helium-rs/helium"
+
+[lib]
+name = "helium_duckdb"
+crate-type = ["cdylib"]
+
+# Build note: `duckdb` with `loadable-extension` does NOT link against any
+# installed DuckDB shared library at build time — it uses an inline
+# `duckdb_ext_api_v1` C-API struct whose function pointers are filled in at
+# runtime by the DuckDB process that loads the extension.  The compiled .dylib
+# therefore has no DuckDB shared-library dependency in its link graph.
+[dependencies]
+duckdb = { version = "1", features = ["loadable-extension"] }
+duckdb-loadable-macros = "1"
+
+# Pull in the helium library from the parent directory.
+# Uses `path` so changes to helium are picked up without publishing to crates.io.
+helium = { path = "..", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = "thin"

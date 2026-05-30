@@ -1,0 +1,20 @@
+[package]
+name = "pyhelium"
+version = "0.1.0"
+edition = "2024"
+
+# This crate is NOT a member of any Cargo workspace.
+# Build with `maturin develop` from this directory.
+
+[lib]
+name = "pyhelium"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Path dep on the main helium crate — default features give us schema-avro,
+# which is sufficient for compress/decompress and file I/O.
+helium = { path = "..", default-features = true }
+# PyO3 with the extension-module feature required for cdylib builds.
+pyo3 = { version = "0.23", features = ["extension-module"] }
+# numpy crate bridges PyO3 ↔ ndarray ↔ numpy arrays.
+numpy = { version = "0.23" }

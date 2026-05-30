@@ -1,0 +1,22 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pyhelium"
+version = "0.1.0"
+description = "Python bindings for the Helium columnar compression library"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.20"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.maturin]
+# The Python module name is `pyhelium` (matches the #[pymodule] fn name).
+module-name = "pyhelium"
+# Build from this directory's Cargo.toml.
+manifest-path = "Cargo.toml"
+# Emit bindings as a .so / .pyd placed directly in the package root.
+features = []

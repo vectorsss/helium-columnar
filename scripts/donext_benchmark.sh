@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# Reproducible real-data compression benchmark on the DoNext 5G/4G dataset.
+#
+# Compares, on a real telecom CSV:
+#   - csv.zst             (plain zstd on the raw CSV)
+#   - helium default      (Tier-1 inferred schema)
+#   - helium optimized    (measured-optimal schema)
+#   - avro + zstd         (5G "Avro+zstd" storage anchor; needs python+fastavro)
+#   - avro + deflate      (Avro's native codec)
+#
+# The DoNext dataset is NOT bundled (CC BY 4.0, ~4.5 GB). Download it from:
+#   https://doi.org/10.17877/TUDODATA-2026-T6MYPO   (TU Dortmund, "DoNext")
+# It is semicolon-separated CSV. Point this script at any of its
+# {cell,neighboring,...}_data.csv files (or your own ';'-CSV).
+#
+# Usage:
+#   scripts/donext_benchmark.sh <path/to/data.csv> [max_rows] [delimiter]
+#
+#   max_rows   optional — take only the first N rows (default: whole file).
+#              Recommended: 100000 — keeps `optimize-schema` fast.
+#   delimiter  optional — CSV field delimiter (default: ';' for DoNext).
+#
+# Requires: a release `helium` binary (cargo build --release --features cli),
+#           zstd on PATH, and optionally python3 + fastavro for the Avro rows.
+#
+set -euo pipefail
+
+# --- locate the helium binary ---
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HELIUM="${HELIUM_BIN:-$ROOT/target/release/helium}"
+if [[ ! -x "$HELIUM" ]]; then
+    echo "helium binary not found at $HELIUM" >&2
+    echo "build it:  cargo build --release --features cli" >&2
+    echo "or set HELIUM_BIN=/path/to/helium" >&2
+    exit 1
+fi
+
+# --- args ---
+if [[ $# -lt 1 ]]; then
+    # Print the leading comment block (the doc header), stopping at the
+    # first non-comment line so we never leak code into the usage text.
+    awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
+    exit 2
+fi
+SRC="$1"
+MAX_ROWS="${2:-0}"
+DELIM="${3:-;}"
+
+if [[ ! -f "$SRC" ]]; then
+    echo "input CSV not found: $SRC" >&2
+    echo "download DoNext from https://doi.org/10.17877/TUDODATA-2026-T6MYPO" >&2
+    exit 1
+fi
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+# --- optional row cap ---
+CSV="$WORK/data.csv"
+if [[ "$MAX_ROWS" -gt 0 ]]; then
+    head -n "$((MAX_ROWS + 1))" "$SRC" > "$CSV"   # +1 for the header
+else
+    cp "$SRC" "$CSV"
+fi
+RAW=$(wc -c < "$CSV" | tr -d ' ')
+NROWS=$(($(wc -l < "$CSV" | tr -d ' ') - 1))
+NCOLS=$(head -1 "$CSV" | awk -F"$DELIM" '{print NF}')
+
+echo "=== DoNext compression benchmark ==="
+echo "source : $SRC"
+echo "rows   : $NROWS   cols: $NCOLS   delimiter: '$DELIM'"
+echo
+
+ratio() { awk "BEGIN{printf \"%.2fx\", $1/$2}"; }
+pct()   { awk "BEGIN{printf \"%+.0f%%\", (1-$1/$2)*100}"; }
+
+# --- csv.zst baseline ---
+zstd -3 -q -f -k "$CSV" -o "$WORK/data.csv.zst"
+ZST=$(wc -c < "$WORK/data.csv.zst" | tr -d ' ')
+
+# --- helium default --- (helium prints progress to stderr; silence it)
+"$HELIUM" convert "$CSV" -o "$WORK/default.he" --delimiter "$DELIM" >/dev/null 2>&1
+HD=$(wc -c < "$WORK/default.he" | tr -d ' ')
+
+# --- helium optimized ---
+"$HELIUM" optimize-schema "$CSV" --delimiter "$DELIM" --out "$WORK/opt.json" >/dev/null 2>&1
+"$HELIUM" convert "$CSV" -o "$WORK/opt.he" --schema "$WORK/opt.json" --delimiter "$DELIM" >/dev/null 2>&1
+HO=$(wc -c < "$WORK/opt.he" | tr -d ' ')
+
+# --- avro baseline (optional) ---
+AV_DEFLATE="" ; AV_ZSTD=""
+if python3 -c "import fastavro" 2>/dev/null; then
+    "$HELIUM" infer-schema "$CSV" --delimiter "$DELIM" --out "$WORK/infer.json" >/dev/null 2>&1
+    python3 "$ROOT/scripts/csv_to_avro.py" "$CSV" "$WORK/infer.json" "$WORK/av" "$DELIM" >/dev/null
+    AV_DEFLATE=$(wc -c < "$WORK/av_deflate.avro" | tr -d ' ')
+    zstd -3 -q -f -k "$WORK/av_null.avro" -o "$WORK/av_null.avro.zst"
+    AV_ZSTD=$(wc -c < "$WORK/av_null.avro.zst" | tr -d ' ')
+fi
+
+# --- round-trip integrity ---
+"$HELIUM" verify "$WORK/opt.he" >/dev/null && RT="OK" || RT="FAILED"
+
+# --- report ---
+printf "%-22s %14s %10s %12s\n" "format" "bytes" "vs raw" "vs csv.zst"
+printf "%-22s %14d %10s %12s\n" "raw csv"           "$RAW" "1.00x" "-"
+printf "%-22s %14d %10s %12s\n" "csv.zst (-3)"       "$ZST" "$(ratio "$RAW" "$ZST")" "1.00x"
+[[ -n "$AV_DEFLATE" ]] && printf "%-22s %14d %10s %12s\n" "avro (deflate)" "$AV_DEFLATE" "$(ratio "$RAW" "$AV_DEFLATE")" "$(ratio "$ZST" "$AV_DEFLATE")"
+[[ -n "$AV_ZSTD" ]]    && printf "%-22s %14d %10s %12s\n" "avro (null)+zstd" "$AV_ZSTD" "$(ratio "$RAW" "$AV_ZSTD")" "$(ratio "$ZST" "$AV_ZSTD")"
+printf "%-22s %14d %10s %12s\n" "helium default"     "$HD" "$(ratio "$RAW" "$HD")" "$(ratio "$ZST" "$HD")"
+printf "%-22s %14d %10s %12s\n" "helium optimized"   "$HO" "$(ratio "$RAW" "$HO")" "$(ratio "$ZST" "$HO")"
+echo
+echo "helium-optimized vs csv.zst:       $(pct "$HO" "$ZST")"
+if [[ -n "$AV_ZSTD" ]]; then
+    echo "helium-optimized vs avro+zstd:     $(pct "$HO" "$AV_ZSTD")"
+fi
+echo "round-trip verify (opt.he):        $RT"
+if [[ -z "$AV_ZSTD" ]]; then
+    echo "(install python3 + fastavro for the avro baseline rows)"
+fi
+[[ "$RT" == "OK" ]] || exit 1
+exit 0
