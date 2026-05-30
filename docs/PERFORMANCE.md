@@ -2,7 +2,7 @@
 
 Numbers measured at `helium v0.2.x` (synthetic / ClickBench sections originally at v0.2.0 `b6f24a8`; the real-data DoNext section added at v0.2.4). Methodology + reproduction commands below each table — paste them at your shell, get matching results within ±10% on similar hardware.
 
-> **TL;DR**: helium's compression edge comes from the **optimizer**, not the default schema. On real telemetry (DoNext 5G) helium-optimized beats `csv.zst` by ~30% and the `Avro+zstd` 5G storage anchor by ~42%; helium-*default* roughly ties or slightly loses to both. See §1.5 for the real-data numbers.
+> **TL;DR**: helium's compression edge comes from the **optimizer**, not the default schema. Across **all 11 DoNext 5G/4G telemetry files**, helium-optimized beats the `Avro+zstd` 5G storage anchor on **every one** (+21% … +50%) and `csv.zst` on **10 of 11** (+3% … +64%, median ~+22%; the lone loss is a low-cardinality neighbor table at −3%); helium-*default* roughly ties or loses to both. See §1.5 for the full per-file matrix.
 
 ## Test environment
 
@@ -93,33 +93,44 @@ Reproduce with `HELIUM_REPORT_MAX_ROWS=1000000` — takes >1 hour on Apple Silic
 ## 1.5 Real-data — DoNext 5G/4G, vs csv.zst and the Avro+zstd anchor
 
 The ClickBench numbers above are web-analytics data. This section uses real
-**telecom Measurement Report** data — the workload helium's "Avro+zstd 5G MR
-replacement" anchor targets. Dataset: **DoNext** (TU Dortmund,
-doi:10.17877/TUDODATA-2026-T6MYPO, CC BY 4.0, ~4.5 GB, semicolon-CSV). The
-`Avro+zstd` row models real 5G MR storage: Avro-serialize (null codec) then
-compress the blob with zstd-3. Avro is produced with helium-inferred types
-(apples-to-apples). H-Bahn `cell_data`, first 100 k rows × 34 cols:
+**telecom** data — the workload helium's "Avro+zstd 5G MR replacement" anchor
+targets. Dataset: **DoNext** (TU Dortmund, doi:10.17877/TUDODATA-2026-T6MYPO,
+CC BY 4.0, semicolon-CSV). The `Avro+zstd` anchor models real 5G storage:
+Avro-serialize (null codec) then compress the blob with zstd-3, with
+helium-inferred types (apples-to-apples).
 
-| format | bytes | vs raw | vs csv.zst |
-|---|---:|---:|---:|
-| raw csv | 19.70 MB | 1.00× | — |
-| csv.zst (-3) | 4.18 MB | 4.72× | 1.00× |
-| avro (deflate) | 6.11 MB | 3.22× | 0.68× |
-| avro (null) + zstd-3  ← 5G anchor | 5.07 MB | 3.89× | 0.82× |
-| helium default | 5.19 MB | 3.79× | 0.80× |
-| **helium optimized** | **2.94 MB** | **6.71×** | **1.42×** |
+Below is **every** DoNext data file — 3 environments (H-Bahn / Mobile /
+static) × {cell, latency, iperf, datarate, neighboring} — first 100 k rows
+each (or the whole file if smaller), sizes in MB:
 
-- **helium-optimized vs csv.zst: +30% smaller. vs the Avro+zstd anchor: +42% smaller.** vs Avro's native deflate: +52%.
-- **helium-default loses to both csv.zst (0.80×) and Avro+zstd (1.02×)** — same story as ClickBench: the per-column framing overhead exceeds the default pipeline's savings; the optimizer (pcodec / delta / gorilla per column) is what wins. RSRP/RSRQ/SINR/timestamp columns are exactly its sweet spot.
-- `neighboring_data` (19 cols) is "messier" (more low-cardinality/string): helium-optimized still wins csv.zst (+30%) and Avro+zstd (+30%), but the margin over csv.zst is narrower.
+| file | raw | csv.zst | avro+zstd (anchor) | **helium-opt** | opt vs csv.zst | opt vs avro |
+|---|---:|---:|---:|---:|---:|---:|
+| H-Bahn/cell_data | 19.70 | 4.18 | 5.07 | **2.94** | **+30%** | **+42%** |
+| H-Bahn/latency_data | 23.74 | 2.17 | 2.45 | **1.69** | +22% | +31% |
+| H-Bahn/iperf_data | 22.26 | 6.34 | 7.33 | **5.04** | +20% | +31% |
+| H-Bahn/datarate_data | 22.42 | 6.32 | 7.31 | **5.06** | +20% | +31% |
+| H-Bahn/neighboring_data | 11.84 | 2.84 | 4.06 | **2.93** | −3% | +28% |
+| Mobile/cell_data | 18.47 | 3.31 | 4.08 | **2.57** | +22% | +37% |
+| Mobile/latency_data | 23.58 | 3.20 | 3.77 | **2.93** | +8% | +22% |
+| Mobile/iperf_data | 28.75 | 7.71 | 8.73 | **6.49** | +16% | +26% |
+| Mobile/neighboring_data | 12.46 | 1.62 | 1.98 | **1.57** | +3% | +21% |
+| static/cell_data | 19.62 | 0.86 | 0.62 | **0.31** | +64% | +50% |
+| static/latency_data | 25.69 | 2.78 | 3.00 | **1.84** | +34% | +39% |
 
-Reproduce (after downloading DoNext):
+- **helium-optimized beats the Avro+zstd 5G anchor on all 11 files** — +21 % to +50 % smaller. This is the headline: across the whole dataset, not one cherry-picked table.
+- **It beats `csv.zst` on 10 of 11** (+3 % to +64 %). The lone exception is `H-Bahn/neighboring_data` (−3 %): a 19-column, mostly low-cardinality neighbor table where zstd's whole-stream LZ slightly edges per-column framing. Even there it still beats the Avro anchor (+28 %).
+- **helium-*default* loses to both** on the data-rich files — same story as ClickBench: per-column framing overhead exceeds the default pipeline's savings; the **optimizer** (pcodec / delta / gorilla per column) is the differentiator. (On the very low-entropy `static/cell_data` even the default nearly matches the optimizer.)
+- Margins are widest on numeric MR-shaped data (cell, datarate, iperf, static) and narrowest on the small low-cardinality neighbor tables — exactly where you'd expect.
+
+Reproduce (after a local DoNext download, or `--fetch-all` to pull it):
 ```bash
 cargo build --release --features cli
+# whole dataset → one combined table (this is how the table above was made):
+scripts/donext_benchmark_all.sh /path/to/DoNext 100000
+# or a single file:
 scripts/donext_benchmark.sh /path/to/DoNext/H-Bahn/cell_data.csv 100000 ';'
 ```
-The script prints this exact table (csv.zst / avro / helium) and is the
-canonical way to re-run it. See `scripts/README.md`.
+See `scripts/README.md`.
 
 **The real value of testing on DoNext was robustness, not ratios**: real messy
 input (non-UTF8 binary columns, European `;` delimiters, sparse nulls beyond
@@ -236,7 +247,8 @@ section (§1.5) is current as of v0.2.4. To rebuild the full picture:
 
 ```bash
 # 0. Real-data DoNext benchmark (§1.5) — after downloading the dataset:
-scripts/donext_benchmark.sh /path/to/DoNext/H-Bahn/cell_data.csv 100000 ';'
+scripts/donext_benchmark_all.sh /path/to/DoNext 100000      # full per-file matrix
+scripts/donext_benchmark.sh /path/to/DoNext/H-Bahn/cell_data.csv 100000 ';'  # single file
 
 # 1. Compression numbers (writes target/format-comparison.md):
 HELIUM_PARQUET_PATH=hits_1.parquet \
