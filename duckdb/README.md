@@ -8,14 +8,36 @@ LOAD 'helium_duckdb';
 SELECT * FROM read_he('path/to/file.he') LIMIT 5;
 SELECT count(*) FROM read_he('path/to/file.he');
 SELECT col_a, col_b FROM read_he('path/to/file.he') WHERE col_a > 100;
+-- v6 catalog-mode files: pass the catalog directory by named parameter
+SELECT * FROM read_he('path/to/file.he', catalog := '/path/to/catalog');
 ```
 
 ## Status
 
-The extension ships the `read_he` table function over the full v3 type set
-(read-only). Planned next steps — projection/predicate pushdown, replacement
-scan, scalar UDFs, and community-extension submission — are tracked in
-[`docs/ROADMAP.md`](../docs/ROADMAP.md) → *Bindings*.
+The extension ships the `read_he` table function over the full v3 type set,
+read-only, with:
+
+- **Projection pushdown** — only the columns you select are decoded. Selecting
+  1 of N columns decodes 1, not N (uses DuckDB's `init`-phase projected column
+  indices + the reader's per-column pruning).
+- **One reader held open** across all stripes (the file is opened once per scan,
+  not once per stripe).
+- **Nested types** — `Struct`, `List`, and `Map` map onto DuckDB STRUCT / LIST /
+  MAP vectors.
+- **v6 catalog-mode files** — pass `catalog := '<dir>'` to resolve the schema.
+
+Remaining items (replacement scan, scalar UDFs, and the predicate-pushdown
+caveat below) are tracked in [`docs/ROADMAP.md`](../docs/ROADMAP.md) → *Bindings*.
+
+### A note on predicate pushdown
+
+Helium's footer carries per-stripe min/max and containment filters, and this
+crate implements the stripe-pruning logic for scalar comparisons
+(`src/prune.rs`, unit-tested). It is **not auto-driven** today: DuckDB's
+*loadable* extension C-API (v1.2.0) exposes projection pushdown but **no
+filter-pushdown hook**, so DuckDB never hands the extension the `WHERE` bounds.
+Until the C-API gains a filter accessor, DuckDB applies `WHERE` after the scan;
+the pruning machinery is ready for the moment it does.
 
 ## Prerequisites
 
@@ -42,46 +64,38 @@ This produces `target/release/libhelium_duckdb.dylib` (macOS) or
 
 ## Packaging
 
-DuckDB requires extensions to be packaged with metadata appended to the
-shared library.  Use `cargo-duckdb-ext-tools`:
+DuckDB requires extensions to be packaged with metadata appended to the shared
+library. The simplest path is the helper script, which builds (`--locked`, so
+the committed `Cargo.lock` pins the C-API ABI), installs `cargo-duckdb-ext-tools`
+if needed, and packages for the host platform:
 
-**macOS arm64 (Apple Silicon):**
 ```bash
-cargo-duckdb-ext package \
-  -i target/release/libhelium_duckdb.dylib \
-  -o helium_duckdb.duckdb_extension \
-  -v v0.1.0 \
-  -p osx_arm64 \
-  --duckdb-capi-version v1.2.0
+# From helium-core/ — autodetect the host platform
+bash duckdb/packaging/package.sh
+
+# Or target an explicit platform (osx_arm64 | osx_amd64 | linux_amd64 | linux_arm64)
+bash duckdb/packaging/package.sh -p linux_amd64
+
+# Override the version / C-API stamps
+EXT_VERSION=v0.1.0 CAPI_VERSION=v1.2.0 bash duckdb/packaging/package.sh
 ```
 
-**macOS x86_64:**
-```bash
-cargo-duckdb-ext package \
-  -i target/release/libhelium_duckdb.dylib \
-  -o helium_duckdb.duckdb_extension \
-  -v v0.1.0 \
-  -p osx_amd64 \
-  --duckdb-capi-version v1.2.0
-```
+Both produce `duckdb/helium_duckdb.duckdb_extension`. The supported platform
+tuples and the ABI-coupling rationale live in
+[`packaging/matrix.md`](packaging/matrix.md); the per-platform CI build+load job
+is [`ci/extension-matrix.yml`](ci/extension-matrix.yml); the steps to publish
+through DuckDB's community-extensions repo are in
+[`packaging/community-extension-submission.md`](packaging/community-extension-submission.md).
 
-**Linux x86_64:**
-```bash
-cargo-duckdb-ext package \
-  -i target/release/libhelium_duckdb.so \
-  -o helium_duckdb.duckdb_extension \
-  -v v0.1.0 \
-  -p linux_amd64 \
-  --duckdb-capi-version v1.2.0
-```
+To package by hand instead of using the script:
 
-**Linux aarch64:**
 ```bash
+cargo build --release --locked
 cargo-duckdb-ext package \
-  -i target/release/libhelium_duckdb.so \
+  -i target/release/libhelium_duckdb.dylib \   # .so on Linux
   -o helium_duckdb.duckdb_extension \
   -v v0.1.0 \
-  -p linux_arm64 \
+  -p osx_arm64 \                                # your platform tuple
   --duckdb-capi-version v1.2.0
 ```
 
@@ -105,12 +119,17 @@ LOAD '/absolute/path/to/helium_duckdb.duckdb_extension';
 
 -- Now query any .he file
 SELECT * FROM read_he('/path/to/file.he') LIMIT 10;
+
+-- v6 catalog-mode files: resolve the schema from a catalog directory
+SELECT * FROM read_he('/path/to/file.he', catalog := '/path/to/catalog') LIMIT 10;
 ```
 
 ## Smoke test
 
-The `smoke.sh` script builds a 5-column, 100-row `.he` file and runs three
-queries against it:
+The `smoke.sh` script builds `.he` fixtures and runs a real `LOAD` + query suite
+covering projection pushdown, nullable + multi-stripe correctness (values
+straddling stripe/chunk boundaries), nested `Struct` / `List` / `Map`, and v6
+catalog-mode reads:
 
 ```bash
 # From helium-core/
@@ -141,6 +160,9 @@ Expected output ends with `=== All smoke tests passed ===`.
 | `Dictionary { Primitive { T } }` | same as `T` (dictionary expanded) |
 | `Dictionary { Utf8 }` | `VARCHAR` (dictionary expanded) |
 | `Nullable { T }` | same as `T`, nullable |
+| `Struct { fields }` | `STRUCT(...)` |
+| `List { inner }` | `LIST(inner)` |
+| `Map { key, value }` | `MAP(key, value)` |
 | `Decimal128 { p, s }` | `DECIMAL(p, s)` |
 | `Date { Days }` | `DATE` |
 | `Date { Millis }` | `BIGINT` (ms since epoch) |
@@ -151,21 +173,15 @@ Expected output ends with `=== All smoke tests passed ===`.
 
 These are tracked in [`docs/ROADMAP.md`](../docs/ROADMAP.md) → *Bindings*.
 
-- **No predicate pushdown.** DuckDB applies all `WHERE` clauses after reading
-  all rows. Closing this via the DuckDB filter-pushdown hooks + stripe min/max
-  pruning is the highest-value next step.
-- **No projection pushdown.** All columns are read from disk even if only a
-  subset is projected; column pruning is the most natural first win.
-- **Nested types not supported.** `Struct`, `List`, `Map`, `Union`, `ArrayOf`,
-  and `ArrayOfUtf8` columns cause an error at bind time with a clear message.
-  Use `helium convert --csv-strict` to flatten nested schemas before loading.
-- **Catalog-mode (v6) files not supported.** Files written with
-  `HeliumWriter::with_catalog_ref` will error.  Use the standard v5 writer.
+- **Predicate pushdown is not auto-driven.** DuckDB applies `WHERE` clauses
+  after reading the projected rows. The stripe-pruning logic exists and is
+  unit-tested (`src/prune.rs`), but the DuckDB *loadable* extension C-API
+  (v1.2.0) exposes no filter-pushdown hook, so DuckDB never passes the
+  extension the `WHERE` bounds. See the "note on predicate pushdown" above.
+- **`Union` and v2 `ArrayOf` / `ArrayOfUtf8` are not yet projected.** They error
+  at bind time with a clear message. `Struct`, `List`, and `Map` are supported.
 - **Read-only.** The extension queries existing `.he` files; produce them with
   the `helium` CLI or library.
-- **Multi-stripe files re-open the file per stripe.** `func` opens the file and
-  rebuilds the reader each time it advances to a new stripe; holding one reader
-  open across stripes is a pending optimization.
 
 ## DuckDB version compatibility
 

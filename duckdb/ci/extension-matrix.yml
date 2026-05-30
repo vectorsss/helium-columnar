@@ -1,0 +1,80 @@
+# DuckDB extension build + load matrix (snippet).
+#
+# This is a ready-to-merge GitHub Actions job. Copy the `duckdb-extension:`
+# entry below into the `jobs:` map of the root `.github/workflows/ci.yml` to
+# upgrade today's compile-only gate into a real per-platform build + LOAD smoke.
+# It lives here (not in the root workflow) so the binding work stays inside
+# `duckdb/`.
+#
+# What it does, per platform tuple:
+#   1. Build + package the extension with the pinned C-API ABI (Cargo.lock).
+#   2. On platforms with a DuckDB CLI available, run duckdb/smoke.sh — a real
+#      LOAD + query over generated .he files (projection, nullable/multi-stripe,
+#      nested types, v6 catalog).
+#   3. Upload the packaged .duckdb_extension as a build artifact.
+
+jobs:
+  duckdb-extension:
+    name: DuckDB extension (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: osx_arm64,   runner: macos-14 }
+          - { platform: osx_amd64,   runner: macos-13 }
+          - { platform: linux_amd64, runner: ubuntu-latest }
+          - { platform: linux_arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + duckdb target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            duckdb/target
+          key: ${{ runner.os }}-duckdb-ext-${{ hashFiles('duckdb/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-duckdb-ext-
+
+      # duckdb-rs builds libduckdb-sys via bindgen → needs libclang on Linux.
+      - name: Install libclang (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+
+      - name: Install DuckDB CLI
+        shell: bash
+        run: |
+          # The CLI is used by smoke.sh for the real LOAD + query test.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            brew install duckdb
+          else
+            # Linux: fetch the matching CLI release.
+            curl -fsSL https://install.duckdb.org | sh
+            echo "$HOME/.duckdb/cli/latest" >> "$GITHUB_PATH"
+          fi
+
+      - name: Install helium CLI (for smoke.sh fixtures)
+        run: cargo build --release --features cli
+
+      - name: Build + package extension
+        env:
+          EXT_VERSION: v0.1.0
+          CAPI_VERSION: v1.2.0
+        run: bash duckdb/packaging/package.sh -p ${{ matrix.platform }}
+
+      - name: Smoke test (real LOAD + query)
+        # Run only on the native runner arch (cross-packaged artifacts can't be
+        # LOADed on a different arch).
+        run: bash duckdb/smoke.sh
+
+      - name: Upload packaged extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: helium_duckdb-${{ matrix.platform }}
+          path: duckdb/helium_duckdb.duckdb_extension
+          if-no-files-found: error
