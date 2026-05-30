@@ -1,4 +1,4 @@
-//! Helium DuckDB loadable extension — Phase 1.
+//! Helium DuckDB loadable extension.
 //!
 //! Registers the `read_he(path VARCHAR)` table function so DuckDB can query
 //! `.he` files directly:
@@ -10,8 +10,9 @@
 //! SELECT col_a, col_b FROM read_he('path/to/file.he') WHERE col_a > 100;
 //! ```
 //!
-//! ## Phase 1 limitations
-//! - No predicate / projection pushdown — DuckDB applies all filters itself.
+//! ## Current limitations (tracked in `docs/ROADMAP.md`)
+//! - No predicate / projection pushdown — DuckDB reads every column and every
+//!   row, then applies filters itself. Closing this is the highest-value item.
 //! - Catalog-mode (v6) files error out with an explicit message.
 //! - Nested types (Struct, List, Map, Union) are not yet projected through
 //!   DuckDB's complex-type vectors; they error with a clear message.
@@ -217,10 +218,10 @@ fn logical_type_to_duckdb(
     match lt {
         Primitive { data_type } => Ok(primitive_dt_to_duckdb(*data_type)),
 
-        Utf8 | DictUtf8 => Ok(LogicalTypeHandle::from(LogicalTypeId::Varchar)),
+        Utf8 => Ok(LogicalTypeHandle::from(LogicalTypeId::Varchar)),
         Binary => Ok(LogicalTypeHandle::from(LogicalTypeId::Blob)),
 
-        // v2 legacy array types — Phase 1 not supported
+        // v2 legacy array types — not yet supported
         ArrayOf { .. } | ArrayOfUtf8 => Err(
             "read_he: ArrayOf / ArrayOfUtf8 (v2 legacy) not yet supported; \
              convert the schema to v3 List first with the helium CLI"
@@ -231,22 +232,24 @@ fn logical_type_to_duckdb(
         NullablePrim { data_type } => Ok(primitive_dt_to_duckdb(*data_type)),
         NullableUtf8 => Ok(LogicalTypeHandle::from(LogicalTypeId::Varchar)),
         NullableBinary => Ok(LogicalTypeHandle::from(LogicalTypeId::Blob)),
-        DictPrim { data_type } => Ok(primitive_dt_to_duckdb(*data_type)),
 
         // v3 nullable wrapper — DuckDB columns are always nullable, unwrap the inner type
         Nullable { inner } => logical_type_to_duckdb(inner),
 
-        // Phase 1 deferred: nested types
+        // Dictionary maps to its inner value type (materialized on read).
+        Dictionary { inner } => logical_type_to_duckdb(inner),
+
+        // Deferred: nested types (see docs/ROADMAP.md)
         Struct { .. } => Err(
-            "read_he: Struct columns not yet supported in Phase 1; \
+            "read_he: Struct columns not yet supported; \
              flatten with `helium convert --csv-strict`"
                 .into(),
         ),
         List { .. } => Err(
-            "read_he: List columns not yet supported in Phase 1".into(),
+            "read_he: List columns not yet supported".into(),
         ),
-        Map { .. } => Err("read_he: Map columns not yet supported in Phase 1".into()),
-        Union { .. } => Err("read_he: Union columns not yet supported in Phase 1".into()),
+        Map { .. } => Err("read_he: Map columns not yet supported".into()),
+        Union { .. } => Err("read_he: Union columns not yet supported".into()),
 
         // Semantic types
         Decimal128 { precision, scale } => {
@@ -363,18 +366,22 @@ fn write_column_to_chunk(
             }
         }
 
-        LogicalColumn::DictPrim { dictionary, indices } => {
-            expand_dict_prim(output, col_idx, dictionary, indices, row_start, chunk_size);
-        }
-
-        LogicalColumn::DictUtf8 { dictionary, indices } => {
-            let vec = output.flat_vector(col_idx);
-            for (i, &idx) in
-                indices[row_start..row_start + chunk_size].iter().enumerate()
-            {
-                vec.insert(i, dictionary[idx as usize].as_str());
+        LogicalColumn::Dictionary { dictionary, indices } => match dictionary.as_ref() {
+            LogicalColumn::Primitive(cd) => {
+                expand_dict_prim(output, col_idx, cd, indices, row_start, chunk_size);
             }
-        }
+            LogicalColumn::Utf8(dict) => {
+                let vec = output.flat_vector(col_idx);
+                for (i, &idx) in indices[row_start..row_start + chunk_size].iter().enumerate() {
+                    vec.insert(i, dict[idx as usize].as_str());
+                }
+            }
+            _ => {
+                return Err("read_he: Dictionary with a non-scalar inner type is not yet \
+                            supported (only Primitive / Utf8)"
+                    .into());
+            }
+        },
 
         // v3 nullable — compacted inner values
         LogicalColumn::Nullable { present, value } => {
@@ -449,7 +456,7 @@ fn write_column_to_chunk(
         }
 
         LogicalColumn::ArrayOf { .. } | LogicalColumn::ArrayOfUtf8 { .. } => {
-            return Err("read_he: ArrayOf not supported in Phase 1".into());
+            return Err("read_he: ArrayOf not supported".into());
         }
 
         LogicalColumn::Struct { .. }
@@ -548,7 +555,8 @@ fn write_flat_data_nullable(
     }
 }
 
-/// Expand a `DictPrim` column (dictionary + index array) into the output chunk.
+/// Expand a `Dictionary { Primitive }` column (dictionary + index array) into
+/// the output chunk.
 fn expand_dict_prim(
     output: &mut DataChunkHandle,
     col_idx: usize,
@@ -580,7 +588,7 @@ fn expand_dict_prim(
         ColumnData::U64(d) => expand_typed!(d, u64),
         ColumnData::F32(d) => expand_typed!(d, f32),
         ColumnData::F64(d) => expand_typed!(d, f64),
-        ColumnData::Bytes(_) => { /* Not reachable for DictPrim */ }
+        ColumnData::Bytes(_) => { /* Not reachable for a primitive dictionary */ }
     }
 }
 
@@ -668,7 +676,7 @@ fn write_nullable_compacted(
 
         other => {
             return Err(format!(
-                "read_he: Nullable<{}> not yet supported in Phase 1",
+                "read_he: Nullable<{}> not yet supported",
                 other.variant_name()
             )
             .into());
@@ -696,8 +704,7 @@ impl VariantName for LogicalColumn {
             LogicalColumn::NullablePrim { .. } => "NullablePrim",
             LogicalColumn::NullableUtf8 { .. } => "NullableUtf8",
             LogicalColumn::NullableBinary { .. } => "NullableBinary",
-            LogicalColumn::DictPrim { .. } => "DictPrim",
-            LogicalColumn::DictUtf8 { .. } => "DictUtf8",
+            LogicalColumn::Dictionary { .. } => "Dictionary",
             LogicalColumn::Struct { .. } => "Struct",
             LogicalColumn::List { .. } => "List",
             LogicalColumn::Map { .. } => "Map",

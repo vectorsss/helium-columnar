@@ -52,6 +52,50 @@ jobs:
       - name: cargo clippy --all-targets --all-features
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+  bindings:
+    name: Bindings (python + duckdb)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + binding targets
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            duckdb/target
+            python/target
+          key: ${{ runner.os }}-bindings-${{ hashFiles('duckdb/Cargo.toml', 'python/Cargo.toml', 'Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bindings-
+
+      # The duckdb extension is a separate crate (path-dep on helium-columnar).
+      # A compile gate catches the kind of breakage that the crate rename and
+      # the Dict* removal caused; the full load-into-DuckDB smoke is run locally
+      # via duckdb/smoke.sh. duckdb-rs needs libclang for its bindgen build.
+      - name: Install libclang (duckdb-rs bindgen)
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+
+      - name: Build duckdb extension
+        run: cargo build --locked --manifest-path duckdb/Cargo.toml
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # pyhelium: build the wheel with maturin, install it, run its test suite.
+      - name: Build + test pyhelium
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin pytest numpy
+          maturin build --manifest-path python/Cargo.toml --out python/dist
+          pip install --no-index --find-links python/dist pyhelium
+          python -m pytest python/tests -q
+
   format-comparison-report:
     name: Cross-format comparison report
     runs-on: ubuntu-latest

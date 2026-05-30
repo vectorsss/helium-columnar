@@ -19,9 +19,9 @@ crate-type = ["cdylib"]
 duckdb = { version = "1", features = ["loadable-extension"] }
 duckdb-loadable-macros = "1"
 
-# Pull in the helium library from the parent directory.
-# Uses `path` so changes to helium are picked up without publishing to crates.io.
-helium = { path = "..", default-features = false }
+# Pull in the helium library from the parent directory (package is
+# `helium-columnar`, imported as `helium`). Path dep picks up local changes.
+helium = { path = "..", package = "helium-columnar", default-features = false }
 
 [profile.release]
 opt-level = 3

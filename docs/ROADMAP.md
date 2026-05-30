@@ -48,6 +48,64 @@ randomly addressable.
   Tokio per-partition dispatch remains; a "partition fully pruned → empty
   result" short-circuit would remove that floor.
 
+## Bindings (pyhelium / helium-duckdb)
+
+The two language bindings live in `python/` and `duckdb/` as independent Cargo
+projects (path-deps on `helium-columnar`, not published, gated by the `bindings`
+CI job). They are deliberately asymmetric today: **pyhelium** can *write* but
+only flat numeric/string/binary columns; **helium-duckdb** can *read* the full
+v3 type set but cannot write or push down. Each has one decisive next step.
+
+### helium-duckdb — close the pushdown gap
+
+The extension currently reads *every column and every row* of an `.he` file and
+hands them to DuckDB to filter. That switches off Helium's core advantage
+(columnar pruning + per-stripe min/max), so the table function on a `.he` file
+is no faster — often slower — than reading the equivalent Parquet. Priorities:
+
+- **Projection pushdown** *(highest leverage, smallest change)*. DuckDB's
+  `init` phase exposes the projected column indices; read only those columns via
+  the reader's existing column pruning. Selecting 1 of 100 columns should decode
+  1, not 100.
+- **Predicate pushdown + stripe pruning.** Carry `WHERE` bounds into bind/init
+  through DuckDB's filter-pushdown hooks and skip stripes whose footer min/max
+  cannot match. This is the binding-side companion to *Random access* above.
+- **Nested types.** Map `Struct`/`List`/`Map` onto DuckDB's STRUCT/LIST/MAP
+  vectors (they error today) for full v3 fidelity.
+- **v6 catalog support.** A `read_he(path, catalog := '…')` parameter wired to
+  `HeliumReader::new_with_resolver` (v6 files error today).
+- **Hold one reader open across stripes** instead of re-opening the file per
+  stripe in the scan callback.
+- **Correctness.** Add nullable + multi-stripe coverage to `smoke.sh`: the
+  `NullablePrim` write path indexes the (compacted) values array by absolute row
+  and needs verification across chunk/stripe boundaries.
+- **Distribution.** A DuckDB-version build matrix and community-extensions
+  submission. The pinned `duckdb/Cargo.lock` exists because the loadable ABI is
+  coupled to a specific DuckDB version — that coupling must be made explicit.
+
+### pyhelium — Arrow / pandas interop
+
+The binding only moves numeric `ndarray`s and `list[str]`/`list[bytes]` today,
+with hardcoded pipelines. The decisive step is **Arrow interop**
+(`read_he() -> pyarrow.Table`, `write_he(df)`): reusing Helium's `arrow` bridge
+lifts the flat-only limitation in one move, bringing nullable, nested, and
+semantic (Date/Datetime/Decimal) columns along for free. Then:
+
+- **Encoding control.** Expose the optimizer / coder specs so Python users get
+  Helium's actual compression wins instead of fixed defaults.
+- **Streaming + projection.** Chunked (multi-stripe) writes and projected,
+  by-stripe reads for bounded memory on large files (`read_he` is whole-file,
+  in-memory today).
+- **Packaging.** abi3 wheels + a `cibuildwheel` matrix + PyPI publishing
+  (currently source-only via `maturin`).
+
+### Shared
+
+- **Benchmarks.** Neither binding has throughput/latency numbers. The DuckDB
+  numbers are only meaningful *after* pushdown lands, so sequence it that way.
+- **CI depth.** Upgrade the duckdb compile gate to a real load+query smoke over
+  a DuckDB-version matrix; add a pyhelium wheel-build matrix.
+
 ## Memory
 
 - **Typed-array Parquet reader.** `convert` peaks at ~322 MB on 1 M × 105

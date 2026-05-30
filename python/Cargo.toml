@@ -13,7 +13,8 @@ crate-type = ["cdylib"]
 [dependencies]
 # Path dep on the main helium crate — default features give us schema-avro,
 # which is sufficient for compress/decompress and file I/O.
-helium = { path = "..", default-features = true }
+# Package is `helium-columnar`; imported as `helium`.
+helium = { path = "..", package = "helium-columnar", default-features = true }
 # PyO3 with the extension-module feature required for cdylib builds.
 pyo3 = { version = "0.23", features = ["extension-module"] }
 # numpy crate bridges PyO3 ↔ ndarray ↔ numpy arrays.

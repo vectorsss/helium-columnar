@@ -10,14 +10,12 @@ SELECT count(*) FROM read_he('path/to/file.he');
 SELECT col_a, col_b FROM read_he('path/to/file.he') WHERE col_a > 100;
 ```
 
-## Phase 1 status
+## Status
 
-Phase 1 ships the scaffolding and the `read_he` table function.
-Phase 2 (separate task) will add:
-- Replacement scan (`SELECT * FROM 'foo.he'` without an explicit function call)
-- Predicate pushdown into the Helium reader
-- Scalar UDFs (`helium_compress`, `helium_decompress`)
-- Submission to the DuckDB community-extensions repository
+The extension ships the `read_he` table function over the full v3 type set
+(read-only). Planned next steps — projection/predicate pushdown, replacement
+scan, scalar UDFs, and community-extension submission — are tracked in
+[`docs/ROADMAP.md`](../docs/ROADMAP.md) → *Bindings*.
 
 ## Prerequisites
 
@@ -135,12 +133,13 @@ Expected output ends with `=== All smoke tests passed ===`.
 | `Primitive { U64 }` | `UBIGINT` |
 | `Primitive { F32 }` | `FLOAT` |
 | `Primitive { F64 }` | `DOUBLE` |
-| `Utf8` / `DictUtf8` | `VARCHAR` |
+| `Utf8` | `VARCHAR` |
 | `Binary` | `BLOB` |
 | `NullablePrim { T }` | same as `T`, nullable |
 | `NullableUtf8` | `VARCHAR`, nullable |
 | `NullableBinary` | `BLOB`, nullable |
-| `DictPrim { T }` | same as `T` (dictionary expanded) |
+| `Dictionary { Primitive { T } }` | same as `T` (dictionary expanded) |
+| `Dictionary { Utf8 }` | `VARCHAR` (dictionary expanded) |
 | `Nullable { T }` | same as `T`, nullable |
 | `Decimal128 { p, s }` | `DECIMAL(p, s)` |
 | `Date { Days }` | `DATE` |
@@ -148,21 +147,25 @@ Expected output ends with `=== All smoke tests passed ===`.
 | `Datetime { unit, tz: None }` | `TIMESTAMP_S` / `TIMESTAMP_MS` / `TIMESTAMP` / `TIMESTAMP_NS` |
 | `Datetime { unit, tz: Some(_) }` | `TIMESTAMPTZ` |
 
-## Limitations (Phase 1)
+## Limitations
+
+These are tracked in [`docs/ROADMAP.md`](../docs/ROADMAP.md) → *Bindings*.
 
 - **No predicate pushdown.** DuckDB applies all `WHERE` clauses after reading
-  all rows.  This will be addressed in Phase 2 via the DuckDB filter pushdown
-  hooks.
+  all rows. Closing this via the DuckDB filter-pushdown hooks + stripe min/max
+  pruning is the highest-value next step.
 - **No projection pushdown.** All columns are read from disk even if only a
-  subset is projected.  Phase 2 will add column pruning.
+  subset is projected; column pruning is the most natural first win.
 - **Nested types not supported.** `Struct`, `List`, `Map`, `Union`, `ArrayOf`,
   and `ArrayOfUtf8` columns cause an error at bind time with a clear message.
   Use `helium convert --csv-strict` to flatten nested schemas before loading.
 - **Catalog-mode (v6) files not supported.** Files written with
   `HeliumWriter::with_catalog_ref` will error.  Use the standard v5 writer.
-- **Multi-stripe files re-open the file per stripe.** The current implementation
-  opens the file once per stripe for simplicity; Phase 2 will hold the file
-  handle open across stripes.
+- **Read-only.** The extension queries existing `.he` files; produce them with
+  the `helium` CLI or library.
+- **Multi-stripe files re-open the file per stripe.** `func` opens the file and
+  rebuilds the reader each time it advances to a new stripe; holding one reader
+  open across stripes is a pending optimization.
 
 ## DuckDB version compatibility
 

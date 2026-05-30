@@ -7,7 +7,8 @@
 //! - `write_he(path: str, data: dict) -> None`
 //! - `read_he(path: str) -> dict`
 //!
-//! Only flat (non-nested) column types are supported in Phase 1.
+//! Only flat (non-nested) column types are supported today; Arrow/pandas
+//! interop and the wider type set are tracked in `docs/ROADMAP.md`.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -424,8 +425,8 @@ fn decompress(py: Python<'_>, buf: &[u8]) -> PyResult<PyObject> {
 /// ValueError
 ///     If writing fails (I/O error or codec error).
 /// NotImplementedError
-///     If nested types (Struct / List / Map / Union) are detected (Phase 1
-///     supports flat columns only).
+///     If nested types (Struct / List / Map / Union) are detected
+///     (write_he currently supports flat columns only).
 #[pyfunction]
 fn write_he(py: Python<'_>, path: &str, data: &Bound<'_, PyDict>) -> PyResult<()> {
     // Build schema + collect columns.
@@ -477,7 +478,7 @@ fn write_he(py: Python<'_>, path: &str, data: &Bound<'_, PyDict>) -> PyResult<()
 /// ValueError
 ///     If reading fails (I/O, corrupt data, etc.).
 /// NotImplementedError
-///     If the file contains nested column types not supported in Phase 1
+///     If the file contains nested column types not yet supported
 ///     (Struct, List, Map, Union, Nullable, etc.).
 #[pyfunction]
 fn read_he(py: Python<'_>, path: &str) -> PyResult<PyObject> {
@@ -499,7 +500,7 @@ fn read_he(py: Python<'_>, path: &str) -> PyResult<PyObject> {
 
 /// Convert a `LogicalColumn` to a Python object suitable for the `read_he` return dict.
 ///
-/// Phase 1 supports only flat (non-nested) columns.
+/// Supports only flat (non-nested) columns today.
 fn logical_column_to_python(py: Python<'_>, col: LogicalColumn) -> PyResult<PyObject> {
     match col {
         LogicalColumn::Primitive(cd) => {
@@ -517,14 +518,14 @@ fn logical_column_to_python(py: Python<'_>, col: LogicalColumn) -> PyResult<PyOb
             )?;
             Ok(list.into())
         }
-        // All nested / nullable / dict types are Phase 2+.
+        // Nested / nullable / dict / semantic types are not yet bridged to
+        // Python — see the Arrow-interop item in docs/ROADMAP.md.
         LogicalColumn::ArrayOf { .. }
         | LogicalColumn::ArrayOfUtf8 { .. }
         | LogicalColumn::NullablePrim { .. }
         | LogicalColumn::NullableUtf8 { .. }
         | LogicalColumn::NullableBinary { .. }
-        | LogicalColumn::DictPrim { .. }
-        | LogicalColumn::DictUtf8 { .. }
+        | LogicalColumn::Dictionary { .. }
         | LogicalColumn::Struct { .. }
         | LogicalColumn::List { .. }
         | LogicalColumn::Map { .. }
@@ -534,8 +535,9 @@ fn logical_column_to_python(py: Python<'_>, col: LogicalColumn) -> PyResult<PyOb
         | LogicalColumn::Date32 { .. }
         | LogicalColumn::Date64 { .. }
         | LogicalColumn::Datetime { .. } => Err(PyNotImplementedError::new_err(
-            "Phase 1 read_he only supports flat Primitive/Utf8/Binary columns; \
-             nested, nullable, dict, and semantic-type columns are Phase 2",
+            "read_he currently supports only flat Primitive/Utf8/Binary columns; \
+             nested, nullable, dict, and semantic-type columns are planned \
+             (see docs/ROADMAP.md)",
         )),
     }
 }
@@ -546,7 +548,7 @@ fn logical_column_to_python(py: Python<'_>, col: LogicalColumn) -> PyResult<PyOb
 
 /// `pyhelium` — Python bindings for the Helium columnar compression library.
 ///
-/// Phase 1 API surface:
+/// Current API surface:
 /// - :func:`compress` / :func:`decompress` — HEC0 self-describing codec.
 /// - :func:`write_he` / :func:`read_he` — flat-column ``.he`` file I/O.
 #[pymodule]
