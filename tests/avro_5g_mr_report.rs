@@ -753,12 +753,10 @@ fn avro_5g_mr_compression_report() {
     // Print to stdout
     eprintln!("\n{report}");
 
-    // Write to target/
-    std::fs::create_dir_all("/Users/chizhao/Code/opensource/Helium/helium-core/target").ok();
-    std::fs::write(
-        "/Users/chizhao/Code/opensource/Helium/helium-core/target/avro-5g-mr-report.md",
-        &report,
-    )
-    .expect("write report to target/");
-    eprintln!("Report written to target/avro-5g-mr-report.md");
+    // Write to the crate's target/ dir (machine-independent).
+    let target_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/target");
+    std::fs::create_dir_all(target_dir).ok();
+    let report_path = format!("{target_dir}/avro-5g-mr-report.md");
+    std::fs::write(&report_path, &report).expect("write report to target/");
+    eprintln!("Report written to {report_path}");
 }

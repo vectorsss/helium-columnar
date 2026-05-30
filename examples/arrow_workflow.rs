@@ -31,17 +31,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("=== Helium ↔ Arrow bridge sanity check ===\n");
 
-    // ---- 1. Pick a real file or synthesize one. ----
-    let candidates = [
-        "hits_1.he",
-        "/Users/chizhao/Code/opensource/Helium/helium-core/hits_1.he",
-    ];
+    // ---- 1. Use ./hits_1.he if present, else synthesize a small dataset. ----
     let mut he_path: Option<&Path> = None;
-    for c in &candidates {
-        if Path::new(c).exists() {
-            he_path = Some(Path::new(c));
-            break;
-        }
+    if Path::new("hits_1.he").exists() {
+        he_path = Some(Path::new("hits_1.he"));
     }
 
     let tmp = tempfile::NamedTempFile::new()?;
