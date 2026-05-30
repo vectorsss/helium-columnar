@@ -1,6 +1,6 @@
 # Roadmap
 
-Forward-looking plans for Helium beyond the **v0.1.0** release. None of these
+Forward-looking plans for Helium beyond the **v0.2.0** release. None of these
 block the current use cases (analytical queries over fits-in-memory or
 streaming-converted columnar data); they are where the largest headroom is.
 This document is self-contained.
@@ -147,44 +147,48 @@ What the report says:
   **and decodes faster than it** (so the usual "better ratio, worse scan"
   tradeoff does not apply here). ClickBench has no float columns, which is why
   that win only shows up in the synthetic rows.
-- The realistic path is therefore to **contribute one or two targeted page
-  builders** (a pcodec float/double builder, a delta+pcodec timestamp builder),
-  rather than porting Helium's whole pipeline abstraction into StarRocks. A full
+- The realistic path is to **contribute one or two targeted page builders** (a
+  pcodec float/double builder, later a delta+pcodec timestamp builder), rather
+  than porting Helium's whole pipeline abstraction into StarRocks. A full
   pipeline rewrite would fight StarRocks' vectorisation / zero-copy /
-  dictionary-in-engine investments for little additional payoff on current
-  evidence.
+  dictionary-in-engine investments for little additional payoff.
 
-### Bringing pcodec into the BE — the FFI plan
+### Prototype status — validated end-to-end
 
-pcodec already ships a C interface with exactly the caller-allocates primitives
-a page builder needs — `guarantee_file_size`, `simple_compress_into`, and
-`simple_decompress_into` (caller-owned buffers, stateless, thread-safe, no Rust
-heap ownership crossing the boundary). So linking pcodec into StarRocks' C++ BE
-does **not** require writing our own bindings from scratch. The plan is to use
-that interface and contribute the couple of improvements it needs upstream:
+A working prototype integration has confirmed this thesis inside a live engine
+(not yet upstreamed):
 
-- It is an early-stage interface, so **pin a known-good version** — that gives
-  us stability regardless of upstream churn, the same posture StarRocks already
-  takes with zstd/lz4/bitshuffle.
-- Two small upstream contributions cover the gaps: a **`staticlib`** crate-type
-  (to link into the C++ BE; it is `dylib`-only today), and making its
-  `decompress_into` call the core's zero-copy `simple_decompress_into` instead
-  of allocating + copying.
-- Build it as a staticlib + a generated header + a thin C++ RAII wrapper; one
-  pcodec standalone buffer per StarRocks page (the paging spec maps onto the
-  ~1 MB page model).
+- **pcodec links into the C++ backend as a static library.** The build-system
+  question — whether the engine's third-party build can link a Rust-produced
+  static library plus a generated C header — is **resolved**: it does. pcodec's
+  C interface already exposes the caller-allocates primitives a page builder
+  needs; the two gaps were closed in a fork and are the upstream contributions
+  to make — a `staticlib` crate-type, and routing `decompress_into` through the
+  core's zero-copy path. The version is pinned, the same posture the engine
+  takes with zstd / lz4 / bitshuffle.
+- **A pcodec float/double page builder + decoder is wired into the segment
+  format** under a stable encoding id, as a peer of BIT_SHUFFLE: chosen at write
+  time, decoded transparently on read.
+- **The encoding is user-selectable per column via DDL** — a table property on
+  `CREATE TABLE`, and on `ALTER TABLE` (which re-encodes existing data through a
+  schema-change rewrite; an empty value resets a column to the default).
+  Validation rejects the codec on non-float columns, and the property
+  round-trips through `SHOW CREATE TABLE`.
+- **Measured in the live engine:** a pcodec-encoded `DOUBLE` column was several×
+  smaller on disk than the BIT_SHUFFLE default — matching the offline report —
+  with scan / aggregation latency within noise of the default, so the "better
+  ratio, free scan" property held in practice.
 
-Remaining open items before a C++ prototype is worthwhile:
+### What remains
 
-- **Build-system integration (the one genuine unknown).** Whether StarRocks'
-  BE third-party build can link a Rust-produced staticlib + generated header.
-  This is a build-system task, not an FFI-feasibility question — validate it
-  before committing to the prototype.
-- **Zero-copy decode is available** in pcodec's core (`simple_decompress_into`
-  decodes straight into engine-owned memory), so no new algorithm work is
-  needed for the common path.
-- **Fallback if linking Rust proves untenable:** `gorilla` / `delta-of-delta`
-  reimplement trivially in C++ and still beat BIT_SHUFFLE on floats/timestamps
-  (lower ratio than pcodec, zero external dependency).
-- **Random access.** Selective scans want sub-page seek; this depends on the
-  *Random access as a first-class coder property* item above.
+- **Upstreaming.** The main friction for a merge is the Rust static-library
+  build dependency; the page builder, the per-column DDL, and the two pcodec C
+  contributions are the pieces to land. Any other BIT_SHUFFLE-style float store
+  is a candidate for the same targeted-builder approach.
+- **Broader column coverage.** The prototype targets float/double, where the win
+  is largest. A delta + pcodec timestamp builder is the natural next column.
+- **Sub-page random access.** Selective scans want sub-page seek; this depends
+  on the *Random access as a first-class coder property* item above.
+- **Fallback if linking Rust proves untenable upstream:** `gorilla` /
+  `delta-of-delta` reimplement trivially in C++ and still beat BIT_SHUFFLE on
+  floats / timestamps (lower ratio than pcodec, zero external dependency).
