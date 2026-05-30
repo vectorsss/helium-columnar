@@ -190,6 +190,37 @@ pub fn load_data_for_fmt(
     Ok(accum.unwrap_or_default())
 }
 
+/// Load only the first `sample_rows` rows — a representative prefix used by
+/// `optimize-schema` to pick per-column encodings without reading the whole
+/// file. Stops reading after the first chunk (does not scan the rest of a
+/// large file). `sample_rows` must be > 0; for the whole file use
+/// [`load_data_for_fmt`].
+pub fn load_data_sample(
+    path: &Path,
+    fmt: Format,
+    sample_rows: usize,
+    opts: &LoadOptions,
+) -> anyhow::Result<LoadedData> {
+    if matches!(fmt, Format::AvroSchema) {
+        bail!("Avro schema files (.avsc) contain no row data; use a CSV/JSON/Parquet/Avro input");
+    }
+    let schema = infer_schema_for_fmt(path, fmt, opts)?;
+    // Read exactly one chunk of `sample_rows` rows, then stop via a sentinel
+    // error so the rest of the file is never read.
+    const STOP: &str = "::helium-sample-prefix-collected::";
+    let mut first: Option<LoadedData> = None;
+    let res = load_data_chunked(path, fmt, &schema, sample_rows, opts, &mut |chunk| {
+        first = Some(chunk);
+        bail!(STOP)
+    });
+    if let Err(e) = res
+        && !format!("{e}").contains(STOP)
+    {
+        return Err(e);
+    }
+    Ok(first.unwrap_or_default())
+}
+
 // ---------------------------------------------------------------------------
 // Chunked / streaming data loader
 // ---------------------------------------------------------------------------

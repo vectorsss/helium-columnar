@@ -7,19 +7,30 @@ use helium::optimizer::Optimizer;
 
 /// Run the `optimize-schema` subcommand.
 ///
-/// Loads a sample of the input data, runs [`Optimizer`] to select the best
-/// encoding pipeline per leaf column, and writes the resulting schema as JSON
-/// to `out_path` (or stdout if `None`).
+/// Picking per-column encodings is a structural decision (delta vs gorilla vs
+/// pcodec, …), so it is measured on a representative prefix of the data rather
+/// than the whole file. `sample_rows` caps how many rows are loaded for that
+/// measurement: a positive value reads only the first `sample_rows` rows (the
+/// default), and `0` means "use the whole file". The emitted schema then
+/// applies to the full dataset via `helium convert --schema`.
 ///
 /// `delimiter` is the CSV field delimiter byte (ignored for non-CSV inputs).
-pub fn run(input: &Path, out_path: Option<&Path>, delimiter: u8) -> anyhow::Result<()> {
-    // Load data (infer schema from file if not provided — the optimizer
-    // uses the inferred schema as the structural skeleton and replaces the
-    // encoding pipelines).
+pub fn run(
+    input: &Path,
+    out_path: Option<&Path>,
+    delimiter: u8,
+    sample_rows: usize,
+) -> anyhow::Result<()> {
+    // The optimizer uses the inferred schema as the structural skeleton and
+    // replaces only the encoding pipelines.
     let fmt = super::loader::detect_format(input)?;
     let opts = super::loader::LoadOptions { delimiter };
-    let data = super::loader::load_data_for_fmt(input, fmt, None, &opts)
-        .with_context(|| format!("loading data from '{}'", input.display()))?;
+    let data = if sample_rows == 0 {
+        super::loader::load_data_for_fmt(input, fmt, None, &opts)
+    } else {
+        super::loader::load_data_sample(input, fmt, sample_rows, &opts)
+    }
+    .with_context(|| format!("loading data from '{}'", input.display()))?;
 
     if data.is_empty() {
         anyhow::bail!("no columns found in '{}'", input.display());

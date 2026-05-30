@@ -5,6 +5,22 @@ on [Keep a Changelog](https://keepachangelog.com/); the project follows
 [Semantic Versioning](https://semver.org/) with the usual pre-1.0 caveat —
 **0.x minor releases may include breaking API or on-disk format changes.**
 
+## [Unreleased]
+
+### Changed
+- `helium optimize-schema` now measures encodings on a **sampled prefix** by
+  default (`--sample-rows 200000`); pass `--sample-rows 0` to use the whole
+  file. Sampling reads only the prefix, so picking a schema for a large file no
+  longer scans it end-to-end. The emitted schema still applies to the full
+  dataset via `convert --schema`.
+- `pcodec` now accepts **all integer widths** (`i8`–`i64`, `u8`–`u64`) plus
+  `f32`/`f64` (was `i32`/`i64`/`u32`/`u64`/`f32`/`f64`). 8-bit types are enabled
+  via pco's opt-in. (`f16` still pending — Helium has no `F16` type; see ROADMAP.)
+
+### Added
+- `docs/ROADMAP.md` — forward-looking plan (SIMD coders, parallel query
+  execution, `f16`, object-store backends).
+
 ## [0.1.0] — 2026-05-30
 
 Initial public release.

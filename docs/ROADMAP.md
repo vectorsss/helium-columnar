@@ -1,0 +1,74 @@
+# Roadmap
+
+Forward-looking plans for Helium beyond the **v0.1.0** release. None of these
+block the current use cases (analytical queries over fits-in-memory or
+streaming-converted columnar data); they are where the largest headroom is.
+This document is self-contained.
+
+## Encoding throughput — SIMD integer compression
+
+Every coder today is **scalar**. The biggest unrealized win is SIMD
+bit-packing and the TurboPFor algorithm family (group-varint / "TurboByte",
+SIMD frame-of-reference + bit-packing, patched-FOR). Reference numbers put
+SIMD bit-pack decode around 10 G integers/s (~40 GB/s) versus the scalar
+path's hundreds of MB/s — a 1–2 order-of-magnitude gap for
+encode/decode-throughput-bound workloads.
+
+Two design implications:
+
+- **A third coder category.** The current block / non-block split doesn't model
+  fixed-size SIMD batches well. A `MicroBlockCoder` operating on fixed batches
+  (e.g. 128 / 256 values) would sit between `NonBlockCoder` (per-element) and
+  `BlockCoder` (whole-buffer), with pipelines composing
+  per-element → micro-block → block.
+- **License constraint (important).** Helium is MIT-licensed. The canonical
+  TurboPFor implementation is **not** permissively licensed, so it cannot be
+  vendored. The algorithms themselves aren't copyrightable, so the realistic
+  path is a permissive implementation or a clean-room one. Candidates:
+  **FastLanes** (MIT, CWI), **simdcomp** / **FastPFor** / **StreamVByte**
+  (Apache-2.0, D. Lemire). Plan: prototype against FastLanes/simdcomp and adopt
+  only if it reaches a large fraction of TurboPFor's throughput.
+
+## Random access as a first-class coder property
+
+Point lookups within a stripe currently require decoding the whole physical
+column. Exposing an access pattern per coder (sequential vs randomly
+addressable) — where a pipeline's capability is that of its weakest stage —
+would let selective queries (`WHERE pk = X`) decode only the needed values.
+This pairs naturally with the SIMD/MicroBlock work, since fixed batches are
+randomly addressable.
+
+## Query engine
+
+- **Parallel partition execution.** A non-pruning `WHERE col = X` that matches
+  values in every stripe currently scans the predicate column serially across
+  partitions (~6 s for 100 stripes × 10 k rows). Parallelizing partition
+  execution in `HeliumExec` is the single biggest query-latency win.
+- **Fully-pruned fast path.** Even when every stripe is pruned, ~350 ms of
+  Tokio per-partition dispatch remains; a "partition fully pruned → empty
+  result" short-circuit would remove that floor.
+
+## Memory
+
+- **Typed-array Parquet reader.** `convert` peaks at ~322 MB on 1 M × 105
+  columns because the Parquet row API yields strings for all columns of a chunk
+  at once. A typed (column-array) Parquet read path would cut this another
+  5–10×.
+
+## Type system
+
+- **`f16` (half-precision float).** `pco` supports it and it is common in ML /
+  sensor data, but Helium has no `F16` logical/physical type yet. Adding the
+  type (plus `gorilla` / `pcodec` support) is a self-contained extension.
+- Decimal128 / Date / Datetime semantic types already ship in v0.1.0.
+
+## Storage backends
+
+- **`object_store` integration** (S3 / GCS / Azure) so `.he` files can be read
+  and written directly against cloud object storage, not just the local
+  filesystem.
+
+## Format / catalog
+
+- The v6 shared-schema catalog is filesystem-backed. A networked / shared
+  catalog service is a possible direction for multi-writer deployments.

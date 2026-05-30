@@ -134,8 +134,11 @@ enum Commands {
 
     /// Produce a measured-optimal schema by running the optimizer.
     ///
-    /// Loads a sample of the input, runs the encoding picker on each leaf
-    /// column, and emits the resulting schema as JSON.
+    /// Picks per-column encodings by measuring them on a representative prefix
+    /// of the data (the default `--sample-rows 200000`), then emits the schema
+    /// as JSON. Apply it to the full dataset with `convert --schema`. Use
+    /// `--sample-rows 0` to measure on the whole file (slow on large inputs:
+    /// the picker is O(rows × candidate encodings)).
     /// Writes to `--out` file if specified, otherwise to stdout.
     #[command(arg_required_else_help = true)]
     OptimizeSchema {
@@ -148,6 +151,9 @@ enum Commands {
         /// Use ';' for European-style CSV. Ignored for non-CSV inputs.
         #[arg(long, value_name = "CHAR", default_value = ",")]
         delimiter: String,
+        /// Rows to sample when measuring encodings. 0 = whole file.
+        #[arg(long, value_name = "N", default_value_t = 200_000)]
+        sample_rows: usize,
     },
 
     /// Compare compression ratios for different codec terminals on input data.
@@ -316,8 +322,10 @@ fn main() {
             input,
             out,
             delimiter,
-        } => parse_delimiter(&delimiter)
-            .and_then(|delim| cli::optimize_schema::run(&input, out.as_deref(), delim)),
+            sample_rows,
+        } => parse_delimiter(&delimiter).and_then(|delim| {
+            cli::optimize_schema::run(&input, out.as_deref(), delim, sample_rows)
+        }),
         Commands::Compare {
             input,
             codecs,

@@ -529,7 +529,7 @@ Reference for `CoderRegistry::default()` — every ID here works in a
 | `bitpack_auto` | block | integer | `Bytes` | — | scans for max, derives width, prepends it |
 | `zstd` | block | `Bytes` | `Bytes` | `level: i32` (default 3) | general-purpose compressor |
 | `lz4` | block | `Bytes` | `Bytes` | — | faster than zstd, lower ratio |
-| `pcodec` | block | `i32/i64/u32/u64/f32/f64` | `Bytes` | `level: usize` (optional) | typed numeric compressor |
+| `pcodec` | block | integer (`i8`..`i64`, `u8`..`u64`) / `f32` / `f64` | `Bytes` | `level: usize` (optional) | typed numeric compressor (`pco`) |
 | `gorilla` | non-block | `F32 / F64` | `Bytes` | — | XOR-based float coder (Facebook TSDB) |
 | `elias_fano` | block | `U32 / U64` | `Bytes` | — | strictly-increasing sequences only |
 
@@ -1130,6 +1130,8 @@ JSON parse error wrapped in `HeliumError::Format`.
 - **[`docs/PERFORMANCE.md`](./docs/PERFORMANCE.md)** — compression ratios,
   query latency, memory profile, file-format overheads, and reproduction
   commands.
+- **[`docs/ROADMAP.md`](./docs/ROADMAP.md)** — planned work (SIMD coders,
+  parallel query execution, `f16`, object-store backends).
 - **[`CLAUDE.md`](./CLAUDE.md)** — guidance for working inside this repo
   (module layout, gotchas, anti-patterns).
 

@@ -284,7 +284,7 @@ Honest accounting of where the current implementation underperforms:
 - **`WHERE col = X` where X exists in many stripes**: column scan is per-partition serial inside DataFusion's `SerializedFileWriter`-style execution. ~6 s for 100 stripes × 10 k rows on a single column. Adding parallel partition execution would help; not yet done.
 - **`COUNT(*) WHERE filter`**: even when all stripes are prunable, the 100-partition × Tokio dispatch adds up to ~350 ms floor. Below that requires a fast-path in `HeliumExec::execute` for "this partition is fully pruned, return PlaceholderRow with row_count=0".
 - **Convert peak RSS still ~322 MB** on 1 M rows × 105 cols: the chunk's intermediate string representation (Parquet row API) is the bulk. A typed-array Parquet reader integration would drop this another 5-10 ×.
-- **All coders are scalar.** TurboPFor-style SIMD bitpacking is documented in `../helium-turbopfor-amendment.md` but not implemented. For column-encode-throughput-bound workloads, expect 2-5 × headroom unrealized.
-- **No external storage backend.** Only local filesystem. Adding `object_store` integration (S3 / GCS) is a known follow-up.
+- **All coders are scalar.** SIMD bit-packing (the TurboPFor family) is not implemented; for encode/decode-throughput-bound workloads expect a 1–2 order-of-magnitude headroom unrealized.
+- **No external storage backend.** Local filesystem only; `object_store` (S3 / GCS) is a follow-up.
 
-For each, there's a tracking note in `updates.md` or the source code's TODO comments. None are currently a blocker for the demonstrated use cases (analytical query workloads on fits-in-memory-or-streaming Parquet conversion).
+Planned improvements for all of the above are tracked in [`ROADMAP.md`](ROADMAP.md). None are currently a blocker for the demonstrated use cases (analytical query workloads on fits-in-memory-or-streaming Parquet conversion).

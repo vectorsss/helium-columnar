@@ -312,8 +312,12 @@ fn pcodec_roundtrips_every_supported_type() {
             );
         }};
     }
+    check!(I8, I8, i8, (-100i8..100).collect());
+    check!(I16, I16, i16, (-500i16..500).collect());
     check!(I32, I32, i32, (0..1000).collect());
     check!(I64, I64, i64, (0..1000).map(|i| i * 7).collect());
+    check!(U8, U8, u8, (0u8..200).collect());
+    check!(U16, U16, u16, (0u16..1000).collect());
     check!(U32, U32, u32, (0u32..1000).collect());
     check!(U64, U64, u64, (0u64..1000).collect());
     check!(F32, F32, f32, (0..1000).map(|i| i as f32 * 0.5).collect());

@@ -4,8 +4,9 @@ use pco::standalone::{simple_compress, simple_decompress};
 use crate::core::coder::{BlockCoder, Coder, CoderKind, ColumnData, DataType};
 use crate::core::error::{HeliumError, Result};
 
-/// pcodec / pco. Typed-numeric block compressor for the types pco supports:
-/// `i32`, `i64`, `u32`, `u64`, `f32`, `f64`.
+/// pcodec / pco. Typed-numeric block compressor for every integer width
+/// (`i8`…`i64`, `u8`…`u64`) plus `f32` / `f64`. (`pco` also supports `f16`,
+/// which Helium has no logical type for yet — see the roadmap.)
 pub struct Pcodec {
     data_type: DataType,
     config: ChunkConfig,
@@ -14,13 +15,17 @@ pub struct Pcodec {
 impl Pcodec {
     /// Create a new pcodec block compressor.
     ///
-    /// `data_type` must be one of `I32`, `I64`, `U32`, `U64`, `F32`, `F64`.
+    /// `data_type` must be an integer (`I8`…`I64`, `U8`…`U64`) or `F32` / `F64`.
     /// `level` is the pco compression level (0–12); `None` uses the pco default.
     pub fn new(data_type: DataType, level: Option<usize>) -> Result<Self> {
         if !matches!(
             data_type,
-            DataType::I32
+            DataType::I8
+                | DataType::I16
+                | DataType::I32
                 | DataType::I64
+                | DataType::U8
+                | DataType::U16
                 | DataType::U32
                 | DataType::U64
                 | DataType::F32
@@ -29,13 +34,18 @@ impl Pcodec {
             return Err(HeliumError::InvalidParam {
                 coder: "pcodec".into(),
                 param: "<input_type>".into(),
-                reason: format!("pcodec supports i32/i64/u32/u64/f32/f64, got {data_type:?}"),
+                reason: format!(
+                    "pcodec supports integer (i8..i64, u8..u64) and f32/f64, got {data_type:?}"
+                ),
             });
         }
-        let config = match level {
-            Some(l) => ChunkConfig::default().with_compression_level(l),
-            None => ChunkConfig::default(),
-        };
+        // pco gates 8-bit types behind an opt-in ("often a mistake"); Helium's
+        // optimizer only selects pcodec when it measures smallest, so enabling
+        // them here is safe and lets i8/u8 columns use pcodec when it wins.
+        let mut config = ChunkConfig::default().with_enable_8_bit(true);
+        if let Some(l) = level {
+            config = config.with_compression_level(l);
+        }
         Ok(Self { data_type, config })
     }
 }
@@ -72,11 +82,23 @@ fn corrupt(e: pco::errors::PcoError) -> HeliumError {
 impl BlockCoder for Pcodec {
     fn encode_block(&self, input: &ColumnData) -> Result<ColumnData> {
         let bytes = match (self.data_type, input) {
+            (DataType::I8, ColumnData::I8(xs)) => {
+                simple_compress::<i8>(xs, &self.config).map_err(fail)?
+            }
+            (DataType::I16, ColumnData::I16(xs)) => {
+                simple_compress::<i16>(xs, &self.config).map_err(fail)?
+            }
             (DataType::I32, ColumnData::I32(xs)) => {
                 simple_compress::<i32>(xs, &self.config).map_err(fail)?
             }
             (DataType::I64, ColumnData::I64(xs)) => {
                 simple_compress::<i64>(xs, &self.config).map_err(fail)?
+            }
+            (DataType::U8, ColumnData::U8(xs)) => {
+                simple_compress::<u8>(xs, &self.config).map_err(fail)?
+            }
+            (DataType::U16, ColumnData::U16(xs)) => {
+                simple_compress::<u16>(xs, &self.config).map_err(fail)?
             }
             (DataType::U32, ColumnData::U32(xs)) => {
                 simple_compress::<u32>(xs, &self.config).map_err(fail)?
@@ -108,8 +130,12 @@ impl BlockCoder for Pcodec {
             });
         };
         Ok(match self.data_type {
+            DataType::I8 => ColumnData::I8(simple_decompress::<i8>(src).map_err(corrupt)?),
+            DataType::I16 => ColumnData::I16(simple_decompress::<i16>(src).map_err(corrupt)?),
             DataType::I32 => ColumnData::I32(simple_decompress::<i32>(src).map_err(corrupt)?),
             DataType::I64 => ColumnData::I64(simple_decompress::<i64>(src).map_err(corrupt)?),
+            DataType::U8 => ColumnData::U8(simple_decompress::<u8>(src).map_err(corrupt)?),
+            DataType::U16 => ColumnData::U16(simple_decompress::<u16>(src).map_err(corrupt)?),
             DataType::U32 => ColumnData::U32(simple_decompress::<u32>(src).map_err(corrupt)?),
             DataType::U64 => ColumnData::U64(simple_decompress::<u64>(src).map_err(corrupt)?),
             DataType::F32 => ColumnData::F32(simple_decompress::<f32>(src).map_err(corrupt)?),

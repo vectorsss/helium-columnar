@@ -115,7 +115,7 @@ These supersede the parent file where they conflict.
 ### Coder catalog (built-ins registered by `CoderRegistry::default()`)
 
 `src/coders/`:
-`delta`, `delta_of_delta`, `leb128`, `rle`, `deltamin`, `bitpack_fixed` (param: `width`), `bitpack_auto`, `zstd` (param: `level`), `lz4`, `snappy`, `pcodec` (param: `level`), `gorilla`, `elias_fano`. All scalar — TurboPFor-style SIMD is a future direction (see `../helium-turbopfor-amendment.md`).
+`delta`, `delta_of_delta`, `leb128`, `rle`, `deltamin`, `bitpack_fixed` (param: `width`), `bitpack_auto`, `zstd` (param: `level`), `lz4`, `snappy`, `pcodec` (param: `level`; integer i8..i64 / u8..u64 + f32/f64), `gorilla`, `elias_fano`. All scalar — SIMD (TurboPFor family) is a future direction (see `docs/ROADMAP.md`).
 
 When adding a coder: stable string ID (frozen the moment any `.he` ships with it), specialize on `input_type: DataType` in the factory, **new ID for new parameter shapes** (`bitpack_fixed` vs `bitpack_auto` is the canonical split — don't add boolean switches to one ID).
 
