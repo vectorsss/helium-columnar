@@ -91,7 +91,9 @@ jobs:
       - name: Build + test pyhelium
         run: |
           python -m pip install --upgrade pip
-          pip install maturin pytest numpy
+          # pyarrow + pandas are needed for the Arrow / pandas interop tests
+          # (write_table / read_table). numpy covers the codec + flat-dict API.
+          pip install maturin pytest numpy pyarrow pandas
           maturin build --manifest-path python/Cargo.toml --out python/dist
           pip install --no-index --find-links python/dist pyhelium
           python -m pytest python/tests -q

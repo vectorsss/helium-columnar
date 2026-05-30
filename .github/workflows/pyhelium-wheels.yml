@@ -1,0 +1,87 @@
+name: pyhelium wheels
+
+# Builds abi3 wheels for pyhelium across the platform matrix and (on a tag)
+# publishes them to PyPI. This is opt-in: it runs on demand and on version
+# tags, never on every push, so it does not slow down the main CI.
+#
+# Publishing is gated behind a `v*` tag AND a configured `PYPI_API_TOKEN`
+# secret / trusted-publisher setup. See python/PACKAGING.md for the manual
+# publish steps. Until that is configured the publish job is a no-op.
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "pyhelium-v*"
+
+jobs:
+  build-wheels:
+    name: wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-13, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build abi3 wheels with cibuildwheel
+        uses: pypa/cibuildwheel@v2.21
+        with:
+          # The package + its pyproject/Cargo live in python/.
+          package-dir: python
+          output-dir: wheelhouse
+        env:
+          # One abi3 wheel (cp39-abi3) covers all CPython >= 3.9 per platform.
+          CIBW_BUILD: "cp39-*"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  build-sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install maturin
+      - run: maturin sdist --manifest-path python/Cargo.toml --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    name: publish to PyPI (tag only)
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    # Only run on a pyhelium version tag. PyPI publishing also requires the
+    # PYPI_API_TOKEN secret (or a configured trusted publisher); see
+    # python/PACKAGING.md. Left disabled until that is set up.
+    if: startsWith(github.ref, 'refs/tags/pyhelium-v')
+    environment: pypi
+    permissions:
+      id-token: write   # for PyPI trusted publishing (OIDC), preferred over a token
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # Uses trusted publishing (OIDC) when `id-token: write` is granted and
+          # the project is configured on PyPI. Falls back to a token if the
+          # PYPI_API_TOKEN secret is provided.
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
