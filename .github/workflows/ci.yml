@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # Smoke check: feature gating is sound — default-features-off must compile.
+      # Doesn't run tests because most are gated on schema-* / arrow / datafusion.
+      - name: cargo build --no-default-features
+        run: cargo build --no-default-features --verbose
+
+      # Full test suite. --all-features pulls in datafusion + arrow + every
+      # schema adapter; this is the gating bar referenced in CLAUDE.md.
+      - name: cargo test --all-features
+        run: cargo test --all-features --verbose
+
+      # Clippy with -D warnings on every target. Matches the project's
+      # acceptance bar from CLAUDE.md.
+      - name: cargo clippy --all-targets --all-features
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  format-comparison-report:
+    name: Cross-format comparison report
+    runs-on: ubuntu-latest
+    # Run only when explicitly requested — the report is informational and
+    # downloads/builds the parquet + apache-avro deps which take longer.
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-latest-cargo-report-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run format-comparison report (synthetic dataset)
+        run: cargo test --test format_comparison_report --release --all-features -- --nocapture
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: format-comparison-report
+          path: target/format-comparison.md

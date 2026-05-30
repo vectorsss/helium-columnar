@@ -1,0 +1,5 @@
+# unwrap/expect/panic are denied in library + binary code (see [lints] in
+# Cargo.toml) but allowed in test code, where a panic IS the failure signal.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

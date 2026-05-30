@@ -1,0 +1,109 @@
+[package]
+# Published as `helium-columnar` ("helium" is taken on crates.io by an
+# unrelated 2D-game-dev crate). The library and CLI are still named `helium`
+# via [lib]/[[bin]] below, so `use helium::...` and the `helium` command are
+# unchanged.
+name = "helium-columnar"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Columnar compression framework with a typed coder pipeline, JSON-driven schemas, a versioned .he file format, and a DataFusion TableProvider for SQL queries on .he files."
+readme = "README.md"
+repository = "https://github.com/vectorsss/Helium-Core"
+homepage = "https://github.com/vectorsss/Helium-Core"
+keywords = ["compression", "columnar", "parquet", "datafusion", "arrow"]
+categories = ["compression", "encoding", "database-implementations"]
+# Skip large data fixtures and the python/duckdb subtrees from the published
+# crate tarball. The crate is the Rust library + CLI; bindings live in their
+# own subdirs and are not on crates.io.
+exclude = [
+    "hits_1.parquet",
+    "hits_1.he",
+    "python/",
+    "duckdb/",
+    "plan_backup/",
+    "scripts/",
+    "target/",
+]
+
+# The import name stays `helium` even though the package is `helium-columnar`.
+[lib]
+name = "helium"
+
+[features]
+default = ["schema-avro"]
+cli = ["dep:clap", "dep:anyhow", "schema-avro", "schema-csv", "schema-json", "schema-parquet"]
+schema-avro = ["dep:apache-avro"]
+schema-csv = ["dep:csv"]
+schema-json = []
+schema-parquet = ["dep:parquet"]
+arrow = ["dep:arrow"]
+# DataFusion SQL query support. Enables `helium::sql::HeliumTableProvider`.
+# Requires arrow (transitively). Uses datafusion 47.x which pins arrow ^55.
+# Only core features enabled: no parquet, no jit, no compression extras.
+datafusion = ["arrow", "dep:datafusion", "dep:async-trait", "dep:tokio"]
+
+[dependencies]
+blake3 = "1"
+crc32c = "0.6"
+lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
+pco = "1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+snap = "1"
+thiserror = "2"
+unicode-normalization = "0.1"
+zstd = "0.13"
+clap = { version = "4", features = ["derive"], optional = true }
+anyhow = { version = "1", optional = true }
+csv = { version = "1", optional = true }
+parquet = { version = "58", default-features = false, features = ["snap", "zstd", "lz4"], optional = true }
+apache-avro = { version = "0.21", default-features = false, optional = true }
+arrow = { version = "55", default-features = false, optional = true }
+async-trait = { version = "0.1", optional = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread"], optional = true }
+# DataFusion 47.x requires arrow ^55.0.0 — same minor series as our arrow dep.
+# default-features = false: skip parquet integration, jit, compression extras.
+# Enabled sub-features: just what HeliumTableProvider / ExecutionPlan needs.
+datafusion = { version = "47", default-features = false, features = [
+    "nested_expressions",
+    "string_expressions",
+    "datetime_expressions",
+    "encoding_expressions",
+    "regex_expressions",
+    "crypto_expressions",
+    "unicode_expressions",
+], optional = true }
+
+[dev-dependencies]
+arbitrary = { version = "1.4", features = ["derive"] }
+arbtest = "0.3"
+criterion = { version = "0.5", features = ["html_reports"] }
+flate2 = "1"
+parquet = { version = "58", default-features = false, features = ["snap", "zstd", "lz4"] }
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[[bin]]
+name = "helium"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "datafusion_smoke"
+required-features = ["datafusion"]
+
+[[bench]]
+name = "coders"
+harness = false
+
+[[bench]]
+name = "pipelines"
+harness = false
+
+[[bench]]
+name = "slice"
+harness = false

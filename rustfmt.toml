@@ -1,0 +1,6 @@
+# Formatting is enforced by `cargo fmt --check`, not by discipline.
+# Defaults otherwise (max_width = 100, etc.) to stay aligned with the
+# wider Rust ecosystem's "standard" look.
+edition = "2024"
+style_edition = "2024"
+newline_style = "Unix"
