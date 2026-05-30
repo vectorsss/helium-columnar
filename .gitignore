@@ -255,3 +255,6 @@ plan_backup
 
 # Local Claude Code tooling config (not published)
 .claude/
+
+# Local reference checkouts (not part of the crate)
+_refs/

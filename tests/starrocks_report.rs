@@ -1,22 +1,26 @@
-//! StarRocks Phase 1 offline compression comparison.
+//! Offline compression comparison: Helium pipelines vs StarRocks' best
+//! per-column config — the decision input for whether a Helium coder is worth
+//! prototyping inside StarRocks' BE.
 //!
-//! Mirrors the scope of `starrocks-poc-plan.md` §1 and PLAN §6.1:
-//!
-//! - For each ClickBench-shape column, runs six encoders:
-//!   `starrocks_default` (what StarRocks picks today: BIT_SHUFFLE + LZ4 for
-//!   numerics, DICT + LZ4 for strings, RLE for bool), plus the four generic
-//!   baselines (gzip / lz4 / zstd / pcodec) and one or two helium pipelines
-//!   chosen per column.
+//! - For each column shape, runs the StarRocks best-achievable baseline
+//!   (BIT_SHUFFLE + ZSTD for numerics, DICT + ZSTD for strings, RLE + ZSTD for
+//!   bool), the four generic baselines (gzip / lz4 / zstd / pcodec), and one or
+//!   two Helium pipelines chosen per column.
+//! - A decision summary scores Helium's best pipeline against the StarRocks
+//!   baseline on two thresholds — compression-ratio gain ≥ 15% AND decode
+//!   throughput ≥ 70% of baseline — to decide which columns justify a C++
+//!   prototype. Float/timestamp columns are the strongest case (StarRocks'
+//!   BIT_SHUFFLE is weakest there; pcodec/gorilla win).
 //! - Every entry is round-trip verified before the timing loop.
-//! - Emits a Markdown report to `target/starrocks-report.md` with per-row
-//!   winner bolding.
+//! - Emits a Markdown report to `target/starrocks-report.md`.
 //!
 //! Data sources:
-//! - If `HELIUM_PARQUET_PATH` is set, columns are loaded from that Parquet
-//!   file using pre-defined ClickBench-name selectors.
-//! - Otherwise (the default, what CI runs), a deterministic synthetic
-//!   ClickBench-shape dataset is used — realistic distributions for each
-//!   column but ~100 × smaller so the test stays fast.
+//! - If `HELIUM_PARQUET_PATH` is set, the ClickBench-shape columns are loaded
+//!   from that Parquet file. (ClickBench has no float columns, so the
+//!   time-series float/timestamp columns are always synthetic.)
+//! - Otherwise (the default, what CI runs), a deterministic synthetic dataset
+//!   is used — realistic per-column distributions but ~100× smaller so the
+//!   test stays fast.
 //!
 //! Run: `cargo test --test starrocks_report --release -- --nocapture`.
 
@@ -29,7 +33,8 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use helium::{
     BitpackAuto, BlockCoder, CoderRegistry, CoderSpec, ColumnData, DataType, Delta, DeltaMin,
-    Leb128, LogicalColumn, NonBlockCoder, Pcodec, Pipeline, Rle, Schema, StageCoder, Zstd,
+    DeltaOfDelta, GorillaXor, Leb128, LogicalColumn, NonBlockCoder, Pcodec, Pipeline, Rle, Schema,
+    StageCoder, Zstd,
 };
 use pco::ChunkConfig;
 
@@ -216,6 +221,62 @@ fn gen_search_phrase(n: usize) -> Vec<String> {
         .collect()
 }
 
+// ----------------------------------------------------------------------------
+// Time-series / sensor float + timestamp columns.
+//
+// ClickBench has essentially no float columns, but float/double and
+// near-regular timestamps are exactly where pcodec and gorilla beat
+// StarRocks's BIT_SHUFFLE — and where the StarRocks-integration case is
+// strongest. These model DoNext-style sensor/IoT data so the report covers
+// pco's main use case without pulling in an external CSV loader.
+// ----------------------------------------------------------------------------
+
+/// Slowly-varying f64 sensor reading (e.g. temperature): small random walk
+/// around a drifting baseline. Gorilla XOR / pcodec exploit the tiny
+/// value-to-value deltas; BIT_SHUFFLE cannot.
+fn gen_sensor_f64(n: usize) -> Vec<f64> {
+    let mut rng = Rng::new(0x5e_0501);
+    let mut v = 21.5_f64;
+    (0..n)
+        .map(|_| {
+            // step in [-0.05, 0.05), occasionally a small jump.
+            let step = (rng.next_u32() as f64 / u32::MAX as f64 - 0.5) * 0.1;
+            v += step;
+            // round to 0.01 — real sensors report fixed precision, which makes
+            // the XOR/quantized residuals especially compressible.
+            (v * 100.0).round() / 100.0
+        })
+        .collect()
+}
+
+/// CPU-utilisation-style f32 in [0, 100], also slowly varying.
+fn gen_cpu_f32(n: usize) -> Vec<f32> {
+    let mut rng = Rng::new(0xc9_0001);
+    let mut v = 30.0_f32;
+    (0..n)
+        .map(|_| {
+            let step = (rng.next_u32() as f32 / u32::MAX as f32 - 0.5) * 4.0;
+            v = (v + step).clamp(0.0, 100.0);
+            (v * 10.0).round() / 10.0
+        })
+        .collect()
+}
+
+/// Microsecond event timestamps sampled at a near-constant interval (~1 ms)
+/// with small jitter. delta-of-delta collapses to near-zero; this is the
+/// canonical timestamp case.
+fn gen_event_ts_micros(n: usize) -> Vec<i64> {
+    let mut rng = Rng::new(0x715_77a3);
+    let mut t = 1_700_000_000_000_000_i64; // ~2023 in micros
+    (0..n)
+        .map(|_| {
+            let jitter = (rng.next_u32() % 200) as i64 - 100; // ±100 µs
+            t += 1_000 + jitter; // ~1 ms cadence
+            t
+        })
+        .collect()
+}
+
 // ============================================================================
 // Parquet loader (only used when HELIUM_PARQUET_PATH is set)
 // ============================================================================
@@ -382,6 +443,26 @@ fn sr_unshuffle_u32(bytes: &[u8], n: usize) -> Vec<u32> {
         .map(u32::from_le_bytes)
         .collect()
 }
+fn sr_shuffle_f64(v: &[f64]) -> Vec<u8> {
+    let cells: Vec<[u8; 8]> = v.iter().map(|x| x.to_le_bytes()).collect();
+    byte_shuffle::<8>(&cells)
+}
+fn sr_unshuffle_f64(bytes: &[u8], n: usize) -> Vec<f64> {
+    byte_unshuffle::<8>(bytes, n)
+        .into_iter()
+        .map(f64::from_le_bytes)
+        .collect()
+}
+fn sr_shuffle_f32(v: &[f32]) -> Vec<u8> {
+    let cells: Vec<[u8; 4]> = v.iter().map(|x| x.to_le_bytes()).collect();
+    byte_shuffle::<4>(&cells)
+}
+fn sr_unshuffle_f32(bytes: &[u8], n: usize) -> Vec<f32> {
+    byte_unshuffle::<4>(bytes, n)
+        .into_iter()
+        .map(f32::from_le_bytes)
+        .collect()
+}
 
 // ============================================================================
 // Measurement + baseline runners (round-trip verified before timing)
@@ -424,6 +505,12 @@ fn flatten_i8(v: &[i8]) -> Vec<u8> {
 }
 fn flatten_u8(v: &[u8]) -> Vec<u8> {
     v.to_vec()
+}
+fn flatten_f64(v: &[f64]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+fn flatten_f32(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 fn flatten_strings(v: &[String]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -514,9 +601,23 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// StarRocks default baseline: BIT_SHUFFLE (byte-wise) + LZ4 for numerics,
-// RLE for bool, DICT (plain index bytes + lz4) for strings.
+// StarRocks BEST-ACHIEVABLE baseline: BIT_SHUFFLE (byte-wise) + ZSTD for
+// numerics, RLE + ZSTD for bool, DICT + ZSTD for strings.
+//
+// StarRocks ships LZ4 as the default page compression, but supports ZSTD and
+// it is the stronger config. We baseline Helium against ZSTD on purpose: a
+// win here is a win against StarRocks' *best*, not its weakest default — so
+// the numbers are conservative rather than flattering. (The standalone
+// `lz4` / `zstd` columns still show the raw-compression floor for reference.)
 // ---------------------------------------------------------------------------
+
+/// Page-body compression backend for the StarRocks baseline (ZSTD level 3).
+fn sr_block_compress(raw: &[u8]) -> Vec<u8> {
+    zstd::stream::encode_all(raw, 3).unwrap()
+}
+fn sr_block_decompress(comp: &[u8]) -> Vec<u8> {
+    zstd::stream::decode_all(comp).unwrap()
+}
 
 fn bench_starrocks_numeric_generic<T, S, U>(
     values: &[T],
@@ -531,18 +632,18 @@ where
     U: Fn(&[u8], usize) -> Vec<T>,
 {
     let shuffled = shuffle(values);
-    let compressed_once = lz4_flex::compress_prepend_size(&shuffled);
-    let dec_bytes = lz4_flex::decompress_size_prepended(&compressed_once).unwrap();
+    let compressed_once = sr_block_compress(&shuffled);
+    let dec_bytes = sr_block_decompress(&compressed_once);
     let dec_vals = unshuffle(&dec_bytes, values.len());
     assert_eq!(dec_vals, values, "{name} round-trip mismatch");
 
     let (encode_ns, encoded) = time_median(iters, || {
         let shuf = shuffle(values);
-        lz4_flex::compress_prepend_size(&shuf)
+        sr_block_compress(&shuf)
     });
     let n = values.len();
     let (decode_ns, _) = time_median(iters, || {
-        let b = lz4_flex::decompress_size_prepended(&encoded).unwrap();
+        let b = sr_block_decompress(&encoded);
         unshuffle(&b, n)
     });
     Measure {
@@ -593,12 +694,12 @@ fn bench_starrocks_dict_utf8(values: &[String], iters: usize) -> Measure {
             dict_page.extend_from_slice(&o.to_le_bytes());
         }
         dict_page.extend_from_slice(&data);
-        let compressed_dict = lz4_flex::compress_prepend_size(&dict_page);
+        let compressed_dict = sr_block_compress(&dict_page);
         out.extend_from_slice(&(compressed_dict.len() as u32).to_le_bytes());
         out.extend_from_slice(&compressed_dict);
 
         let shuf = sr_shuffle_u32(&indices);
-        let compressed_idx = lz4_flex::compress_prepend_size(&shuf);
+        let compressed_idx = sr_block_compress(&shuf);
         out.extend_from_slice(&(compressed_idx.len() as u32).to_le_bytes());
         out.extend_from_slice(&compressed_idx);
         out
@@ -609,7 +710,7 @@ fn bench_starrocks_dict_utf8(values: &[String], iters: usize) -> Measure {
     let decode = |bytes: &[u8]| -> Vec<String> {
         let dict_count = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
         let dict_len = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
-        let dict_page = lz4_flex::decompress_size_prepended(&bytes[8..8 + dict_len]).unwrap();
+        let dict_page = sr_block_decompress(&bytes[8..8 + dict_len]);
 
         let off_bytes = 4 * (dict_count + 1);
         let mut offsets = Vec::with_capacity(dict_count + 1);
@@ -629,9 +730,7 @@ fn bench_starrocks_dict_utf8(values: &[String], iters: usize) -> Measure {
 
         let idx_off = 8 + dict_len;
         let idx_len = u32::from_le_bytes(bytes[idx_off..idx_off + 4].try_into().unwrap()) as usize;
-        let idx_shuf =
-            lz4_flex::decompress_size_prepended(&bytes[idx_off + 4..idx_off + 4 + idx_len])
-                .unwrap();
+        let idx_shuf = sr_block_decompress(&bytes[idx_off + 4..idx_off + 4 + idx_len]);
         let indices = sr_unshuffle_u32(&idx_shuf, values.len());
 
         indices
@@ -690,18 +789,18 @@ fn bench_starrocks_rle_bool(values: &[i8], iters: usize) -> Measure {
     };
 
     let raw = encode(values);
-    let compressed_once = lz4_flex::compress_prepend_size(&raw);
-    let dec = lz4_flex::decompress_size_prepended(&compressed_once).unwrap();
+    let compressed_once = sr_block_compress(&raw);
+    let dec = sr_block_decompress(&compressed_once);
     let dec_vals = decode(&dec, values.len());
     assert_eq!(dec_vals, values, "sr_rle_bool round-trip mismatch");
 
     let (encode_ns, encoded) = time_median(iters, || {
         let r = encode(values);
-        lz4_flex::compress_prepend_size(&r)
+        sr_block_compress(&r)
     });
     let n = values.len();
     let (decode_ns, _) = time_median(iters, || {
-        let r = lz4_flex::decompress_size_prepended(&encoded).unwrap();
+        let r = sr_block_decompress(&encoded);
         decode(&r, n)
     });
     Measure {
@@ -874,7 +973,7 @@ fn write_ratio_table(out: &mut String, rows: &[Row]) {
     .unwrap();
     writeln!(
         out,
-        "| Column | Shape | Raw | starrocks_default | gzip | lz4 | zstd | pcodec | helium(zstd) | helium(pco) | helium pipeline | +pco pipeline |"
+        "| Column | Shape | Raw | sr(enc+zstd) | gzip | lz4 | zstd | pcodec | helium(zstd) | helium(pco) | helium pipeline | +pco pipeline |"
     )
     .unwrap();
     writeln!(
@@ -914,7 +1013,7 @@ fn write_ratio_table(out: &mut String, rows: &[Row]) {
     writeln!(out).unwrap();
     writeln!(
         out,
-        "_starrocks_default is the encoding StarRocks picks for each column's logical type: BIT_SHUFFLE (byte-wise) + LZ4 for numerics, DICT + LZ4 for strings, RLE + LZ4 for booleans. We use byte-shuffle rather than the upstream bit-shuffle library to avoid a dependency — the difference is typically under 10% on compression ratio._"
+        "_sr(enc+zstd) is StarRocks' **best-achievable** config per column type: BIT_SHUFFLE + ZSTD for numerics, DICT + ZSTD for strings, RLE + ZSTD for booleans. StarRocks ships LZ4 by default (weaker); we baseline against ZSTD so any Helium win is conservative. Byte-shuffle stands in for the upstream bit-shuffle library (no extra dep) — typically under 10% difference on ratio._"
     )
     .unwrap();
 }
@@ -932,7 +1031,7 @@ fn write_throughput_table(
     .unwrap();
     writeln!(
         out,
-        "| Column | starrocks_default | gzip | lz4 | zstd | pcodec | helium(zstd) | helium(pco) |"
+        "| Column | sr(enc+zstd) | gzip | lz4 | zstd | pcodec | helium(zstd) | helium(pco) |"
     )
     .unwrap();
     writeln!(out, "|---|---:|---:|---:|---:|---:|---:|---:|").unwrap();
@@ -999,7 +1098,7 @@ fn row_watch_id(values: &[i64]) -> Row {
             ITERS,
             "sr_bitshuffle_i64",
         ),
-        starrocks_label: "BIT_SHUFFLE+LZ4".into(),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1052,7 +1151,7 @@ fn row_user_id(values: &[i64]) -> Row {
             ITERS,
             "sr_bitshuffle_i64",
         ),
-        starrocks_label: "BIT_SHUFFLE+LZ4".into(),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1085,7 +1184,7 @@ fn row_client_ip(values: &[u32]) -> Row {
             ITERS,
             "sr_bitshuffle_u32",
         ),
-        starrocks_label: "BIT_SHUFFLE+LZ4".into(),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1127,7 +1226,7 @@ fn row_event_time(values: &[i32]) -> Row {
             ITERS,
             "sr_bitshuffle_i32",
         ),
-        starrocks_label: "BIT_SHUFFLE+LZ4".into(),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1165,7 +1264,7 @@ fn row_event_date(values: &[i16]) -> Row {
             ITERS,
             "sr_bitshuffle_i16",
         ),
-        starrocks_label: "BIT_SHUFFLE+LZ4".into(),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1199,7 +1298,7 @@ fn row_os_code(values: &[u8]) -> Row {
             ITERS,
             "sr_u8_identity_lz4",
         ),
-        starrocks_label: "BIT_SHUFFLE+LZ4".into(),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1233,7 +1332,7 @@ fn row_country_id(values: &[i16]) -> Row {
             ITERS,
             "sr_bitshuffle_i16",
         ),
-        starrocks_label: "BIT_SHUFFLE+LZ4".into(),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1261,7 +1360,7 @@ fn row_is_refresh(values: &[i8]) -> Row {
         shape: "bool (i8)".into(),
         raw_bytes: raw.len(),
         starrocks: bench_starrocks_rle_bool(values, ITERS),
-        starrocks_label: "RLE+LZ4".into(),
+        starrocks_label: "RLE+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1302,7 +1401,7 @@ fn row_title(values: &[String]) -> Row {
         shape: "utf8 medium-card".into(),
         raw_bytes: raw.len(),
         starrocks: bench_starrocks_dict_utf8(values, ITERS),
-        starrocks_label: "DICT+LZ4".into(),
+        starrocks_label: "DICT+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1333,7 +1432,7 @@ fn row_url(values: &[String]) -> Row {
         shape: "utf8 high-card".into(),
         raw_bytes: raw.len(),
         starrocks: bench_starrocks_dict_utf8(values, ITERS),
-        starrocks_label: "DICT+LZ4".into(),
+        starrocks_label: "DICT+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1369,7 +1468,7 @@ fn row_search_phrase(values: &[String]) -> Row {
         shape: "utf8 low-card (many empty)".into(),
         raw_bytes: raw.len(),
         starrocks: bench_starrocks_dict_utf8(values, ITERS),
-        starrocks_label: "DICT+LZ4".into(),
+        starrocks_label: "DICT+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1407,7 +1506,7 @@ fn ua_col_from_u8(v: Vec<u8>) -> Row {
             ITERS,
             "sr_u8_identity_lz4",
         ),
-        starrocks_label: "BIT_SHUFFLE+LZ4".into(),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
         gzip: bench_gzip(&raw, ITERS),
         lz4: bench_lz4(&raw, ITERS),
         zstd: bench_zstd(&raw, ITERS),
@@ -1417,6 +1516,182 @@ fn ua_col_from_u8(v: Vec<u8>) -> Row {
         helium_pco: None,
         helium_pco_label: None,
     }
+}
+
+// --- Time-series / sensor float + timestamp columns (pcodec's main case) ---
+
+fn row_sensor_value(values: &[f64]) -> Row {
+    let raw = flatten_f64(values);
+    let pipeline = Pipeline::new(
+        DataType::F64,
+        vec![nb(GorillaXor::new(DataType::F64).unwrap()), blk(Zstd::default())],
+    )
+    .unwrap();
+    let pipeline_pco =
+        Pipeline::new(DataType::F64, vec![blk(Pcodec::new(DataType::F64, None).unwrap())]).unwrap();
+    Row {
+        column: "SensorValue".into(),
+        shape: "f64 slow-varying".into(),
+        raw_bytes: raw.len(),
+        starrocks: bench_starrocks_numeric_generic(
+            values,
+            sr_shuffle_f64,
+            sr_unshuffle_f64,
+            ITERS,
+            "sr_shuffle_f64",
+        ),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
+        gzip: bench_gzip(&raw, ITERS),
+        lz4: bench_lz4(&raw, ITERS),
+        zstd: bench_zstd(&raw, ITERS),
+        pcodec: Some(bench_pcodec_typed(values, ITERS)),
+        helium: bench_helium(&pipeline, ColumnData::F64(values.to_vec()), ITERS),
+        helium_label: "gorilla+zstd".into(),
+        helium_pco: Some(bench_helium(&pipeline_pco, ColumnData::F64(values.to_vec()), ITERS)),
+        helium_pco_label: Some("pcodec".into()),
+    }
+}
+
+fn row_cpu_pct(values: &[f32]) -> Row {
+    let raw = flatten_f32(values);
+    let pipeline = Pipeline::new(
+        DataType::F32,
+        vec![nb(GorillaXor::new(DataType::F32).unwrap()), blk(Zstd::default())],
+    )
+    .unwrap();
+    let pipeline_pco =
+        Pipeline::new(DataType::F32, vec![blk(Pcodec::new(DataType::F32, None).unwrap())]).unwrap();
+    Row {
+        column: "CpuPct".into(),
+        shape: "f32 slow-varying".into(),
+        raw_bytes: raw.len(),
+        starrocks: bench_starrocks_numeric_generic(
+            values,
+            sr_shuffle_f32,
+            sr_unshuffle_f32,
+            ITERS,
+            "sr_shuffle_f32",
+        ),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
+        gzip: bench_gzip(&raw, ITERS),
+        lz4: bench_lz4(&raw, ITERS),
+        zstd: bench_zstd(&raw, ITERS),
+        pcodec: Some(bench_pcodec_typed(values, ITERS)),
+        helium: bench_helium(&pipeline, ColumnData::F32(values.to_vec()), ITERS),
+        helium_label: "gorilla+zstd".into(),
+        helium_pco: Some(bench_helium(&pipeline_pco, ColumnData::F32(values.to_vec()), ITERS)),
+        helium_pco_label: Some("pcodec".into()),
+    }
+}
+
+fn row_event_ts(values: &[i64]) -> Row {
+    let raw = flatten_i64(values);
+    // Near-constant interval → delta-of-delta collapses to near-zero.
+    let pipeline = Pipeline::new(
+        DataType::I64,
+        vec![
+            nb(DeltaOfDelta::new(DataType::I64).unwrap()),
+            nb(Leb128::new(DataType::I64).unwrap()),
+            blk(Zstd::default()),
+        ],
+    )
+    .unwrap();
+    let pipeline_pco = Pipeline::new(
+        DataType::I64,
+        vec![nb(Delta::new(DataType::I64).unwrap()), blk(Pcodec::new(DataType::I64, None).unwrap())],
+    )
+    .unwrap();
+    Row {
+        column: "EventTsMicros".into(),
+        shape: "i64 ts ~1ms".into(),
+        raw_bytes: raw.len(),
+        starrocks: bench_starrocks_numeric_generic(
+            values,
+            sr_shuffle_i64,
+            sr_unshuffle_i64,
+            ITERS,
+            "sr_shuffle_i64",
+        ),
+        starrocks_label: "BIT_SHUFFLE+ZSTD".into(),
+        gzip: bench_gzip(&raw, ITERS),
+        lz4: bench_lz4(&raw, ITERS),
+        zstd: bench_zstd(&raw, ITERS),
+        pcodec: Some(bench_pcodec_typed(values, ITERS)),
+        helium: bench_helium(&pipeline, ColumnData::I64(values.to_vec()), ITERS),
+        helium_label: "dod+leb128+zstd".into(),
+        helium_pco: Some(bench_helium(&pipeline_pco, ColumnData::I64(values.to_vec()), ITERS)),
+        helium_pco_label: Some("delta+pcodec".into()),
+    }
+}
+
+// ============================================================================
+// Decision summary — the number the go/no-go rests on
+// ============================================================================
+
+/// For each column, take Helium's **best** pipeline (higher compression ratio
+/// of the two variants) and score it against the StarRocks (enc+ZSTD) baseline
+/// on two thresholds: ratio gain ≥ 15% AND decode-throughput retention ≥ 70%
+/// (i.e. ≤ 30% slowdown). This is the table that says whether a column is worth
+/// a C++ prototype.
+fn write_decision_summary(out: &mut String, rows: &[Row]) {
+    writeln!(out, "\n## Decision summary\n").unwrap();
+    writeln!(
+        out,
+        "Helium's best pipeline per column vs StarRocks (enc+ZSTD). \
+         **PASS** = compression-ratio gain ≥ 15% **and** decode throughput ≥ 70% of baseline.\n"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "| Column | sr ratio | best helium | h. ratio | ratio gain | sr decode MB/s | h. decode MB/s | decode kept | verdict |"
+    )
+    .unwrap();
+    writeln!(out, "|---|---:|---|---:|---:|---:|---:|---:|:--:|").unwrap();
+
+    let mut passes = 0usize;
+    for r in rows {
+        let sr_ratio = ratio(r.raw_bytes, r.starrocks.encoded);
+        let sr_dec = mbps(r.raw_bytes, r.starrocks.decode_ns);
+
+        // Pick the higher-ratio Helium variant.
+        let mut best = (r.helium, r.helium_label.clone());
+        if let (Some(p), Some(pl)) = (r.helium_pco, r.helium_pco_label.as_deref())
+            && ratio(r.raw_bytes, p.encoded) > ratio(r.raw_bytes, best.0.encoded)
+        {
+            best = (p, pl.to_string());
+        }
+        let h_ratio = ratio(r.raw_bytes, best.0.encoded);
+        let h_dec = mbps(r.raw_bytes, best.0.decode_ns);
+        let gain = (h_ratio / sr_ratio - 1.0) * 100.0;
+        let kept = (h_dec / sr_dec) * 100.0;
+        let pass = gain >= 15.0 && kept >= 70.0;
+        if pass {
+            passes += 1;
+        }
+        writeln!(
+            out,
+            "| {} | {:.1}x | {} | {:.1}x | {:+.0}% | {:.0} | {:.0} | {:.0}% | {} |",
+            r.column,
+            sr_ratio,
+            best.1,
+            h_ratio,
+            gain,
+            sr_dec,
+            h_dec,
+            kept,
+            if pass { "✅ PASS" } else { "—" },
+        )
+        .unwrap();
+    }
+    writeln!(
+        out,
+        "\n**{passes}/{} columns clear both thresholds.** These are the prototype candidates — \
+         float/timestamp columns are expected to dominate (StarRocks' BIT_SHUFFLE is weakest there). \
+         Decode retention is the risk signal to watch: scalar Helium decode that already lags badly \
+         here will lag worse in StarRocks' vectorised scan.\n",
+        rows.len()
+    )
+    .unwrap();
 }
 
 #[test]
@@ -1499,34 +1774,45 @@ fn starrocks_report() {
         rows.push(row_title(&gen_title(N_ROWS)));
         rows.push(row_url(&gen_url(N_ROWS)));
         rows.push(row_search_phrase(&gen_search_phrase(N_ROWS)));
+        // Time-series float/timestamp columns — pcodec's main case (no
+        // ClickBench equivalent, so synthetic-only).
+        rows.push(row_sensor_value(&gen_sensor_f64(N_ROWS)));
+        rows.push(row_cpu_pct(&gen_cpu_f32(N_ROWS)));
+        rows.push(row_event_ts(&gen_event_ts_micros(N_ROWS)));
     }
 
     let mut report = String::new();
     writeln!(
         &mut report,
-        "# StarRocks Phase 1 offline compression report"
+        "# StarRocks offline compression report (decision-grade)"
     )
     .unwrap();
     writeln!(
         &mut report,
-        "\nCompares **StarRocks default encoding** (BIT_SHUFFLE + LZ4 for numerics, \
-        DICT + LZ4 for strings, RLE + LZ4 for booleans) against four generic baselines \
-        (gzip / lz4 / zstd / pcodec) and a helium pipeline chosen per column shape, \
-        on a ClickBench-shape column set.\n\
+        "\nCompares Helium pipelines against StarRocks' **best-achievable** per-column \
+        config — BIT_SHUFFLE + **ZSTD** for numerics, DICT + ZSTD for strings, RLE + ZSTD \
+        for booleans — plus four generic baselines (gzip / lz4 / zstd / pcodec), on a \
+        ClickBench-shape column set augmented with time-series float/timestamp columns \
+        (pcodec's main case).\n\
+        \n\
+        StarRocks ships LZ4 by default; baselining against ZSTD makes any Helium win \
+        **conservative**. The decision summary below applies two thresholds \
+        (compression-ratio gain ≥ 15% AND decode-throughput retention ≥ 70% of the \
+        StarRocks baseline) to decide which columns justify a C++ prototype.\n\
         \n\
         **Every entry is round-trip verified** before timing — a broken coder fails \
         the test rather than producing pretty numbers.\n\
         \n\
         Dataset: {}\
-        \n\n_PoC caveat: the StarRocks baseline uses byte-shuffle + LZ4 to stand in \
-        for the upstream bit-shuffle + LZ4. Compression-ratio error versus real \
-        StarRocks is typically under 10%._",
+        \n\n_PoC caveat: byte-shuffle stands in for the upstream bit-shuffle library \
+        (no extra dep); ratio error versus real StarRocks is typically under 10%._",
         parquet_path
             .as_deref()
             .unwrap_or(&format!("synthetic ({N_ROWS} rows)"))
     )
     .unwrap();
 
+    write_decision_summary(&mut report, &rows);
     write_ratio_table(&mut report, &rows);
     write_throughput_table(&mut report, &rows, "Encode", |m| m.encode_ns);
     write_throughput_table(&mut report, &rows, "Decode", |m| m.decode_ns);
