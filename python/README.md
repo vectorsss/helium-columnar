@@ -1,6 +1,6 @@
 # pyhelium
 
-Python bindings for the [Helium](https://github.com/vectorsss/Helium-Core)
+Python bindings for the [Helium](https://github.com/vectorsss/helium-columnar)
 columnar compression library.
 
 ## Installation (development)

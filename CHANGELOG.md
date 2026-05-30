@@ -51,4 +51,4 @@ Initial public release.
 - Library + binary deny `unwrap`/`expect`/`panic`; `cargo fmt` / `clippy`
   clean.
 
-[0.1.0]: https://github.com/vectorsss/Helium-Core/releases/tag/v0.1.0
+[0.1.0]: https://github.com/vectorsss/helium-columnar/releases/tag/v0.1.0

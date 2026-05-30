@@ -9,8 +9,8 @@ edition = "2024"
 license = "MIT"
 description = "Columnar compression framework with a typed coder pipeline, JSON-driven schemas, a versioned .he file format, and a DataFusion TableProvider for SQL queries on .he files."
 readme = "README.md"
-repository = "https://github.com/vectorsss/Helium-Core"
-homepage = "https://github.com/vectorsss/Helium-Core"
+repository = "https://github.com/vectorsss/helium-columnar"
+homepage = "https://github.com/vectorsss/helium-columnar"
 keywords = ["compression", "columnar", "parquet", "datafusion", "arrow"]
 categories = ["compression", "encoding", "database-implementations"]
 # Skip large data fixtures and the python/duckdb subtrees from the published
