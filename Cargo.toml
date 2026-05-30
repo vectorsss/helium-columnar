@@ -4,7 +4,7 @@
 # via [lib]/[[bin]] below, so `use helium::...` and the `helium` command are
 # unchanged.
 name = "helium-columnar"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "Columnar compression framework with a typed coder pipeline, JSON-driven schemas, a versioned .he file format, and a DataFusion TableProvider for SQL queries on .he files."

@@ -77,7 +77,7 @@ That's the end-to-end path. A few things worth knowing:
 - **`COUNT(*)` and `MIN` / `MAX` are metadata-only** — file-level
   `Statistics` is exposed to DataFusion's optimizer, so those queries
   constant-fold (no scan, ~28 ms).
-- **Library use**: `helium-columnar = { version = "0.1", features = ["arrow",
+- **Library use**: `helium-columnar = { version = "0.2", features = ["arrow",
   "datafusion"] }` then (as `use helium::...`) build a
   `HeliumTableProvider::try_new(path)?` and register it in your own
   `SessionContext`. See `examples/datafusion_smoke.rs`.
@@ -174,7 +174,7 @@ decomposition and the matching `LogicalColumn` constructor.
 ```toml
 # Cargo.toml — the package is `helium-columnar`, imported as `helium`.
 [dependencies]
-helium-columnar = { version = "0.1", default-features = true }
+helium-columnar = { version = "0.2", default-features = true }
 ```
 
 ### 30-second example — pipeline only

@@ -5,7 +5,7 @@ on [Keep a Changelog](https://keepachangelog.com/); the project follows
 [Semantic Versioning](https://semver.org/) with the usual pre-1.0 caveat —
 **0.x minor releases may include breaking API or on-disk format changes.**
 
-## [Unreleased]
+## [0.2.0] — 2026-05-30
 
 ### Changed
 - `helium optimize-schema` now measures encodings on a **sampled prefix** by
@@ -67,4 +67,5 @@ Initial public release.
 - Library + binary deny `unwrap`/`expect`/`panic`; `cargo fmt` / `clippy`
   clean.
 
+[0.2.0]: https://github.com/vectorsss/helium-columnar/releases/tag/v0.2.0
 [0.1.0]: https://github.com/vectorsss/helium-columnar/releases/tag/v0.1.0
