@@ -29,30 +29,36 @@ Runs an apples-to-apples compression comparison on a real telecom CSV:
 `csv.zst` vs `helium default` vs `helium optimized` vs `avro+zstd` /
 `avro+deflate`. Built around the **DoNext** open 5G/4G measurement dataset.
 
-### Get the data
+### Easiest: `--fetch` (auto-download just the file it needs)
 
-DoNext is **not** bundled (CC BY 4.0, ~4.5 GB). Download from TU Dortmund:
-
-> https://doi.org/10.17877/TUDODATA-2026-T6MYPO
-
-It is semicolon-separated CSV, split into `H-Bahn/`, `Mobile/`, `static/`
-× `{cell,neighboring,latency,datarate,iperf}_data.csv`. The
-`cell_data.csv` files are serving-cell Measurement Reports (RSRP / RSRQ /
-SINR / timestamp / GNSS — the MR-shaped workload); `neighboring_data.csv`
-is the neighbor-cell table.
-
-### Run
+The full DoNext set is ~4.6 GB, but the benchmark only needs one file —
+`H-Bahn/cell_data.csv` (~100 MB, the serving-cell Measurement-Report
+workload). `--fetch` downloads exactly that file from TU Dortmund's
+Dataverse (cached under `target/donext/`, gitignored) and runs the
+benchmark on it:
 
 ```bash
-# Build the CLI first.
-cargo build --release --features cli
+cargo build --release --features cli      # one-time
+scripts/donext_benchmark.sh --fetch        # downloads + benchmarks 100k rows
+scripts/donext_benchmark.sh --fetch 20000  # fewer rows = faster
+```
 
-# Benchmark the first 100k rows of a DoNext cell-data file (recommended:
-# 100k keeps optimize-schema fast; omit the row cap to use the whole file).
+### Or point it at your own DoNext download
+
+The dataset is CC BY 4.0: <https://doi.org/10.17877/TUDODATA-2026-T6MYPO>.
+It is semicolon-separated CSV, split into `H-Bahn/`, `Mobile/`, `static/`
+× `{cell,neighboring,latency,datarate,iperf}_data.csv`. The `cell_data.csv`
+files are serving-cell Measurement Reports (RSRP / RSRQ / SINR / timestamp /
+GNSS — the MR-shaped workload); `neighboring_data.csv` is the neighbor table.
+
+```bash
+cargo build --release --features cli
 scripts/donext_benchmark.sh /path/to/DoNext/H-Bahn/cell_data.csv 100000 ';'
 ```
 
-Args: `<csv> [max_rows] [delimiter]` (delimiter defaults to `;` for DoNext).
+Args: `--fetch [max_rows]`, or `<csv> [max_rows] [delimiter]` (delimiter
+defaults to `;`; max_rows defaults to 100000 with `--fetch`, whole file
+otherwise — 100k keeps `optimize-schema` fast).
 
 The `avro+zstd` / `avro+deflate` rows model how 5G Measurement Reports are
 stored in production (Avro serialization, then the blob compressed). They

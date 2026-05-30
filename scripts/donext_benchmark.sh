@@ -9,14 +9,19 @@
 #   - avro + zstd         (5G "Avro+zstd" storage anchor; needs python+fastavro)
 #   - avro + deflate      (Avro's native codec)
 #
-# The DoNext dataset is NOT bundled (CC BY 4.0, ~4.5 GB). Download it from:
-#   https://doi.org/10.17877/TUDODATA-2026-T6MYPO   (TU Dortmund, "DoNext")
-# It is semicolon-separated CSV. Point this script at any of its
-# {cell,neighboring,...}_data.csv files (or your own ';'-CSV).
+# The DoNext dataset (CC BY 4.0) is published on TU Dortmund's Dataverse:
+#   https://doi.org/10.17877/TUDODATA-2026-T6MYPO
+# The full set is ~4.6 GB, but this benchmark only needs one file —
+# H-Bahn/cell_data.csv (~100 MB, the serving-cell Measurement-Report workload).
+# `--fetch` downloads exactly that file (cached under target/donext/) and runs
+# the benchmark on it, so no manual download is required.
 #
 # Usage:
+#   scripts/donext_benchmark.sh --fetch [max_rows]            # auto-download + run
 #   scripts/donext_benchmark.sh <path/to/data.csv> [max_rows] [delimiter]
 #
+#   --fetch    download H-Bahn/cell_data.csv from Dataverse, then benchmark it
+#              (max_rows defaults to 100000 in this mode; delimiter is ';').
 #   max_rows   optional — take only the first N rows (default: whole file).
 #              Recommended: 100000 — keeps `optimize-schema` fast.
 #   delimiter  optional — CSV field delimiter (default: ';' for DoNext).
@@ -43,6 +48,28 @@ if [[ $# -lt 1 ]]; then
     awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
     exit 2
 fi
+
+# --- optional: auto-download the one file the benchmark needs (~100 MB) ---
+# DoNext H-Bahn/cell_data.csv = Dataverse datafile id 81633 on data.tu-dortmund.de
+# (full dataset is ~4.6 GB; we fetch just this serving-cell MR file). CC BY 4.0.
+if [[ "$1" == "--fetch" ]]; then
+    shift
+    DATA_DIR="$ROOT/target/donext"
+    FETCHED="$DATA_DIR/H-Bahn_cell_data.csv"
+    URL="https://data.tu-dortmund.de/api/access/datafile/81633"
+    mkdir -p "$DATA_DIR"
+    if [[ -f "$FETCHED" ]]; then
+        echo "✓ using cached $FETCHED"
+    else
+        echo "Downloading DoNext H-Bahn/cell_data.csv (~100 MB, CC BY 4.0)…"
+        echo "  $URL"
+        curl -fL --progress-bar -o "$FETCHED" "$URL"
+        echo "✓ wrote $FETCHED"
+    fi
+    # Rebuild args: <fetched-csv> <max_rows (default 100000)> <delimiter ';'>
+    set -- "$FETCHED" "${1:-100000}" ";"
+fi
+
 SRC="$1"
 MAX_ROWS="${2:-0}"
 DELIM="${3:-;}"
