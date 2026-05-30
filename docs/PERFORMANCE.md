@@ -1,6 +1,6 @@
 # Performance baseline
 
-Numbers measured at `helium v0.2.x` (synthetic / ClickBench sections originally at v0.2.0 `b6f24a8`; the real-data DoNext section added at v0.2.4). Methodology + reproduction commands below each table — paste them at your shell, get matching results within ±10% on similar hardware.
+Numbers measured on the `helium-columnar` **v0.1.0** release. Methodology + reproduction commands below each table — paste them at your shell, get matching results within ±10% on similar hardware.
 
 > **TL;DR**: helium's compression edge comes from the **optimizer**, not the default schema. Across **all 11 DoNext 5G/4G telemetry files**, helium-optimized beats the `Avro+zstd` 5G storage anchor on **every one** (+21% … +50%) and `csv.zst` on **10 of 11** (+3% … +64%, median ~+22%; the lone loss is a low-cardinality neighbor table at −3%); helium-*default* roughly ties or loses to both. See §1.5 for the full per-file matrix.
 
@@ -170,7 +170,7 @@ Steady-state numbers (after one warmup run; cold-start adds ~1 s for Tokio runti
 Takeaways:
 - **`COUNT(*)` / `MIN` / `MAX` are O(1)** — they read footer bytes only. No data scan.
 - **Range pushdown works** — `WHERE EventTime > X` stripes whose `[min, max]` doesn't intersect get skipped. All-pruned case is ~30 ms vs 210 ms for partial-prune.
-- **Equality pushdown works for impossible values** via the per-stripe DistinctSet / Bloom filter (introduced in `e598624`); 360 ms is the 100-partition Tokio overhead floor, not actual data scan.
+- **Equality pushdown works for impossible values** via the per-stripe DistinctSet / Bloom filter; 360 ms is the 100-partition Tokio overhead floor, not actual data scan.
 - **Filter that doesn't prune anything** (`RegionID = 229` matches values inside every stripe's range) falls back to full scan of the predicate column — ~6 s for 100 stripes × 10 k rows. Not currently parallel across stripes; partition-scheduling optimization is a future task.
 
 ## 3. Memory profile — `convert` with chunked I/O
@@ -242,8 +242,8 @@ On `hits_1.he` with `--stripe-rows 10000`:
 
 ## 6. Reproducing this document
 
-Numbers in this file span `helium v0.2.0`–`v0.2.4`; the real-data DoNext
-section (§1.5) is current as of v0.2.4. To rebuild the full picture:
+Numbers in this file are from the `helium-columnar` v0.1.0 release. To rebuild
+the full picture:
 
 ```bash
 # 0. Real-data DoNext benchmark (§1.5) — after downloading the dataset:
