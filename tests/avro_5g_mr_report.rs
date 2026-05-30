@@ -660,7 +660,7 @@ fn avro_5g_mr_compression_report() {
         per_col_sizes.push((col_spec.name.clone(), col_bytes));
     }
     let total_data: usize = per_col_sizes.iter().map(|(_, b)| b).sum();
-    per_col_sizes.sort_by(|a, b| b.1.cmp(&a.1));
+    per_col_sizes.sort_by_key(|b| std::cmp::Reverse(b.1));
     for (name, bytes) in &per_col_sizes {
         writeln!(
             &mut report,

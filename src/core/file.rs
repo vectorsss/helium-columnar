@@ -1426,7 +1426,7 @@ fn concat_logical_columns(pieces: Vec<LogicalColumn>, lt: &LogicalType) -> Resul
                 }
             }
             let mut result_variants = Vec::with_capacity(n);
-            for ((v_name, v_lt), pieces) in spec_variants.iter().zip(var_pieces.into_iter()) {
+            for ((v_name, v_lt), pieces) in spec_variants.iter().zip(var_pieces) {
                 let concat = concat_logical_columns(pieces, v_lt)?;
                 result_variants.push((v_name.clone(), concat));
             }
@@ -1508,7 +1508,7 @@ fn concat_logical_columns(pieces: Vec<LogicalColumn>, lt: &LogicalType) -> Resul
                 }
             }
             let mut result_fields = Vec::with_capacity(n_fields);
-            for (spec_field, field_pieces) in spec_fields.iter().zip(per_field.into_iter()) {
+            for (spec_field, field_pieces) in spec_fields.iter().zip(per_field) {
                 let concatenated = concat_logical_columns(field_pieces, &spec_field.logical_type)?;
                 result_fields.push((spec_field.name.clone(), concatenated));
             }
