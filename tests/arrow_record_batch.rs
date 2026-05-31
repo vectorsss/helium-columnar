@@ -7,9 +7,12 @@
 
 use std::io::Cursor;
 
-use arrow::array::{Array, Int32Array, Int64Array, ListArray, StringArray, StructArray};
+use arrow::array::{
+    Array, Int32Array, Int64Array, Int64Builder, ListArray, MapArray, MapBuilder, StringArray,
+    StringBuilder, StructArray,
+};
 
-use helium::arrow::{schema_from_arrow, schema_to_arrow};
+use helium::arrow::{from_arrow_array, schema_from_arrow, schema_to_arrow};
 use helium::core::coder::DataType as HDataType;
 use helium::{
     CoderRegistry, ColumnData, ColumnSpec, HeliumReader, HeliumWriter, LogicalColumn, LogicalType,
@@ -376,4 +379,159 @@ fn record_batch_stripe_out_of_range() {
     let mut reader = HeliumReader::new(Cursor::new(&buf), &make_registry()).unwrap();
     let err = reader.read_record_batch(99);
     assert!(err.is_err(), "expected error for out-of-range stripe index");
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: Nullable<Map<Utf8, Nullable<I64>>> round-trip via read_record_batch
+//
+// Regression: a Map nested inside a Nullable (the shape every pyarrow map
+// produces, since Arrow maps are top-level nullable and map values nullable)
+// used to fail on read. `to_arrow`'s null-backfill path builds a "zero row"
+// for the inner type via `make_zero_row` / `make_empty_col`; those helpers
+// built both map sides from the *key* type, so the value logical type
+// (Nullable<I64>) was applied to the key column (Utf8) and `to_arrow_array`
+// errored. A null map row is included so the zero-row backfill path is taken.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn record_batch_nullable_map() {
+    let int3 = || {
+        vec![
+            helium::CoderSpec::new("delta"),
+            helium::CoderSpec::new("leb128"),
+            helium::CoderSpec::new("zstd"),
+        ]
+    };
+    let int2 = || {
+        vec![
+            helium::CoderSpec::new("leb128"),
+            helium::CoderSpec::new("zstd"),
+        ]
+    };
+
+    // Nullable<Map<Utf8, Nullable<I64>>>; physical leaves, in order:
+    //   present, map.offsets, key.offsets, key.data, value.present, value.values
+    let logical_type = LogicalType::Nullable {
+        inner: Box::new(LogicalType::Map {
+            key: Box::new(LogicalType::Utf8),
+            value: Box::new(LogicalType::Nullable {
+                inner: Box::new(LogicalType::Primitive {
+                    data_type: HDataType::I64,
+                }),
+            }),
+        }),
+    };
+    let encodings = vec![
+        int2(),                            // present
+        int3(),                            // map offsets
+        int3(),                            // key offsets
+        vec![helium::CoderSpec::new("zstd")], // key data
+        int2(),                            // value present
+        int3(),                            // value values
+    ];
+    let schema = Schema::new(vec![ColumnSpec::new("m", logical_type, encodings)]);
+
+    // Rows: 0 => {k1:1, k2:2}, 1 => NULL, 2 => {k3:3}. Present rows (0,2) hold
+    // the compact map data; the null row is backfilled on read.
+    let col = LogicalColumn::Nullable {
+        present: vec![true, false, true],
+        value: Box::new(LogicalColumn::Map {
+            offsets: vec![0, 2, 3],
+            keys: Box::new(LogicalColumn::Utf8(vec![
+                "k1".into(),
+                "k2".into(),
+                "k3".into(),
+            ])),
+            values: Box::new(LogicalColumn::Nullable {
+                present: vec![true, true, true],
+                value: Box::new(LogicalColumn::Primitive(ColumnData::I64(vec![1, 2, 3]))),
+            }),
+        }),
+    };
+
+    let buf = write_read_back(schema, vec![("m", col)]);
+
+    let mut reader = HeliumReader::new(Cursor::new(&buf), &make_registry()).unwrap();
+    let batch = reader.read_record_batch(0).unwrap();
+    assert_eq!(batch.num_rows(), 3);
+
+    let m = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .expect("column 0 should be a MapArray");
+    assert_eq!(m.len(), 3);
+    assert!(m.is_valid(0), "row 0 should be a non-null map");
+    assert!(m.is_null(1), "row 1 should be a null map");
+    assert!(m.is_valid(2), "row 2 should be a non-null map");
+    assert_eq!(m.value_length(0), 2, "row 0 has two entries");
+    assert_eq!(m.value_length(2), 1, "row 2 has one entry");
+
+    // Keys/values across the (non-null) entries, in order.
+    let keys = m.keys().as_any().downcast_ref::<StringArray>().unwrap();
+    let vals = m.values().as_any().downcast_ref::<Int64Array>().unwrap();
+    let got_keys: Vec<&str> = (0..keys.len()).map(|i| keys.value(i)).collect();
+    let got_vals: Vec<i64> = (0..vals.len()).map(|i| vals.value(i)).collect();
+    assert_eq!(got_keys, vec!["k1", "k2", "k3"]);
+    assert_eq!(got_vals, vec![1, 2, 3]);
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: Map built through the *Arrow from_arrow path* (mirrors pyhelium).
+//
+// This reproduces exactly what `pyhelium.write_table` does on a
+// `pa.map_(string, int64)` column: schema is inferred from the Arrow schema
+// (a top-level-nullable Map with nullable values), and the column is built via
+// `from_arrow_array`, decomposed, written, then read back. The third row is an
+// empty map and all rows are present (null_count == 0) — the pyhelium fixture.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn record_batch_map_from_arrow_path() {
+    use arrow::datatypes::{Field, Schema as ArrowSchema};
+    use std::sync::Arc;
+
+    // Build a MapArray: row0 {k1:1, k2:2}, row1 {k3:3}, row2 {} (empty).
+    let mut b = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+    b.keys().append_value("k1");
+    b.values().append_value(1);
+    b.keys().append_value("k2");
+    b.values().append_value(2);
+    b.append(true).unwrap();
+    b.keys().append_value("k3");
+    b.values().append_value(3);
+    b.append(true).unwrap();
+    b.append(true).unwrap(); // empty map
+    let map_arr = b.finish();
+
+    // A top-level-nullable map field, exactly like pyarrow produces.
+    let field = Field::new("m", map_arr.data_type().clone(), true);
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![field]));
+
+    // Infer the Helium schema from Arrow, then build the column via from_arrow.
+    let schema = schema_from_arrow(&arrow_schema).unwrap();
+    let lt = schema.columns[0].logical_type.clone();
+    let arr_ref: arrow::array::ArrayRef = Arc::new(map_arr);
+    let col = from_arrow_array(&arr_ref, &lt).unwrap();
+
+    let buf = write_read_back(schema, vec![("m", col)]);
+
+    let mut reader = HeliumReader::new(Cursor::new(&buf), &make_registry()).unwrap();
+    let batch = reader.read_record_batch(0).unwrap();
+    assert_eq!(batch.num_rows(), 3);
+
+    let m = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .expect("column 0 should be a MapArray");
+    assert_eq!(m.value_length(0), 2);
+    assert_eq!(m.value_length(1), 1);
+    assert_eq!(m.value_length(2), 0); // empty map row
+    let keys = m.keys().as_any().downcast_ref::<StringArray>().unwrap();
+    let vals = m.values().as_any().downcast_ref::<Int64Array>().unwrap();
+    let got_keys: Vec<&str> = (0..keys.len()).map(|i| keys.value(i)).collect();
+    let got_vals: Vec<i64> = (0..vals.len()).map(|i| vals.value(i)).collect();
+    assert_eq!(got_keys, vec!["k1", "k2", "k3"]);
+    assert_eq!(got_vals, vec![1, 2, 3]);
 }
