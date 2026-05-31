@@ -1,8 +1,8 @@
 //! `ArrayRef → LogicalColumn` conversion.
 //!
 //! Converts an Arrow [`ArrayRef`] to a Helium [`LogicalColumn`]. Always
-//! produces **v3-shaped** variants (`Nullable`, `List`, `Struct`, etc.) —
-//! never v2 variants. v2 variants are only emitted by legacy Helium readers.
+//! produces **recursive-shaped** variants (`Nullable`, `List`, `Struct`, etc.) —
+//! never legacy flat variants. The legacy flat variants are only emitted by legacy Helium readers.
 //!
 //! # Null handling
 //!
@@ -29,16 +29,16 @@ use crate::core::schema::{FieldSpec, LogicalColumn, LogicalType};
 /// from `Primitive` or `Utf8` values).
 ///
 /// When `hint` is `None`, the conversion is purely Arrow-schema-driven and
-/// always produces v3-shaped output.
+/// always produces recursive-shaped output.
 ///
 /// # Inverse direction note
 ///
-/// The returned `LogicalColumn` is always v3-shaped:
+/// The returned `LogicalColumn` is always recursive-shaped:
 /// - `Nullable { present, value }` (never `NullablePrim`/`NullableUtf8`)
 /// - `List { offsets, values }` (never `ArrayOf`/`ArrayOfUtf8`)
 ///
-/// Legacy v2 variants round-tripped through Arrow will be returned as their
-/// equivalent v3 shapes.
+/// Legacy flat variants round-tripped through Arrow will be returned as their
+/// equivalent recursive shapes.
 pub fn from_arrow_array(array: &ArrayRef, hint: &LogicalType) -> Result<LogicalColumn> {
     from_arrow_inner(array, hint)
 }
@@ -51,7 +51,7 @@ fn from_arrow_inner(array: &ArrayRef, hint: &LogicalType) -> Result<LogicalColum
         LogicalType::Nullable { inner } => {
             return from_arrow_nullable(array, inner);
         }
-        // v2 compatibility hints: map to v3 forms
+        // legacy flat compatibility hints: map to recursive forms
         LogicalType::NullablePrim { data_type } => {
             let inner_lt = LogicalType::Primitive {
                 data_type: *data_type,
@@ -69,7 +69,7 @@ fn from_arrow_inner(array: &ArrayRef, hint: &LogicalType) -> Result<LogicalColum
 
     // Non-nullable types: if the Arrow array has nulls, we still extract
     // non-null values only (treating it as if there were no null wrapper).
-    // This is consistent with "Arrow -> Helium always produces v3 Nullable
+    // This is consistent with "Arrow -> Helium always produces a recursive Nullable
     // when there are nulls" — but the caller requested a non-nullable type,
     // so we just ignore the null buffer.
 
@@ -189,7 +189,7 @@ fn from_arrow_inner(array: &ArrayRef, hint: &LogicalType) -> Result<LogicalColum
         }
 
         // ------------------------------------------------------------------ //
-        // List and v2 ArrayOf / ArrayOfUtf8                                  //
+        // List and legacy flat ArrayOf / ArrayOfUtf8                                  //
         // ------------------------------------------------------------------ //
         (ArrowDataType::List(_), LogicalType::List { inner }) => from_arrow_list(array, inner),
         (ArrowDataType::List(_), LogicalType::ArrayOf { data_type }) => {
@@ -197,7 +197,7 @@ fn from_arrow_inner(array: &ArrayRef, hint: &LogicalType) -> Result<LogicalColum
                 data_type: *data_type,
             };
             let result = from_arrow_list(array, &inner_lt)?;
-            // Return as v3 List (per spec: inverse always returns v3)
+            // Return as recursive List (per spec: inverse always returns the recursive form)
             Ok(result)
         }
         (ArrowDataType::List(_), LogicalType::ArrayOfUtf8) => {
@@ -234,10 +234,10 @@ fn from_arrow_inner(array: &ArrayRef, hint: &LogicalType) -> Result<LogicalColum
         }
 
         // ------------------------------------------------------------------ //
-        // Dictionary{inner} — v3 recursive                                   //
+        // Dictionary{inner} — recursive                                   //
         // ------------------------------------------------------------------ //
         (ArrowDataType::Dictionary(_, _), LogicalType::Dictionary { inner }) => {
-            from_arrow_dict_v3(array, inner)
+            from_arrow_dict(array, inner)
         }
 
         // ------------------------------------------------------------------ //
@@ -667,10 +667,10 @@ fn from_arrow_union(
 }
 
 // ---------------------------------------------------------------------------
-// Dictionary{inner} — v3 recursive
+// Dictionary{inner} — recursive
 // ---------------------------------------------------------------------------
 
-/// Convert an Arrow `DictionaryArray<UInt32>` to a Helium v3
+/// Convert an Arrow `DictionaryArray<UInt32>` to a Helium recursive
 /// [`LogicalColumn::Dictionary`].
 ///
 /// The Arrow `values()` buffer becomes the Helium `dictionary` (converted
@@ -678,7 +678,7 @@ fn from_arrow_union(
 /// the `indices`.  If the Arrow key type is not UInt32 this function
 /// returns a clear `HeliumError::Format("unsupported")` rather than a wrong
 /// mapping.
-fn from_arrow_dict_v3(array: &ArrayRef, inner: &LogicalType) -> Result<LogicalColumn> {
+fn from_arrow_dict(array: &ArrayRef, inner: &LogicalType) -> Result<LogicalColumn> {
     let arr = array
         .as_any()
         .downcast_ref::<DictionaryArray<UInt32Type>>()
@@ -1062,13 +1062,13 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------- //
-    // 9. Legacy v2 variants roundtrip → v3 shape                            //
+    // 9. Legacy flat variants roundtrip → recursive shape                     //
     // ---------------------------------------------------------------------- //
 
     #[test]
-    fn legacy_nullable_prim_to_arrow_then_back_as_v3() {
-        // NullablePrim is a v2 variant. to_arrow converts it to an Arrow
-        // Int64Array with nulls. from_arrow with a Nullable hint returns v3.
+    fn legacy_nullable_prim_to_arrow_then_back_recursive() {
+        // NullablePrim is a legacy flat variant. to_arrow converts it to an Arrow
+        // Int64Array with nulls. from_arrow with a Nullable hint returns the recursive form.
         let col = LogicalColumn::NullablePrim {
             present: vec![true, false, true],
             values: ColumnData::I64(vec![42, 99]),
@@ -1077,13 +1077,13 @@ mod tests {
             data_type: HDataType::I64,
         };
         let arr = to_arrow_array(&col, &lt).unwrap();
-        // Round-trip through Arrow with the Nullable<Primitive> v3 hint
-        let v3_lt = LogicalType::Nullable {
+        // Round-trip through Arrow with the Nullable<Primitive> recursive hint
+        let recursive_lt = LogicalType::Nullable {
             inner: Box::new(LogicalType::Primitive {
                 data_type: HDataType::I64,
             }),
         };
-        let back = from_arrow_array(&arr, &v3_lt).unwrap();
+        let back = from_arrow_array(&arr, &recursive_lt).unwrap();
         let expected = LogicalColumn::Nullable {
             present: vec![true, false, true],
             value: Box::new(LogicalColumn::Primitive(ColumnData::I64(vec![42, 99]))),
@@ -1143,9 +1143,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_array_of_to_arrow_then_back_as_v3_list() {
-        // ArrayOf is a v2 variant mapping to Arrow List<Int32>.
-        // Back-conversion with the List hint returns v3.
+    fn legacy_array_of_to_arrow_then_back_recursive_list() {
+        // ArrayOf is a legacy flat variant mapping to Arrow List<Int32>.
+        // Back-conversion with the List hint returns the recursive form.
         let col = LogicalColumn::ArrayOf {
             offsets: vec![0, 2, 3],
             values: ColumnData::I32(vec![1, 2, 3]),
@@ -1154,12 +1154,12 @@ mod tests {
             data_type: HDataType::I32,
         };
         let arr = to_arrow_array(&col, &lt).unwrap();
-        let v3_lt = LogicalType::List {
+        let recursive_lt = LogicalType::List {
             inner: Box::new(LogicalType::Primitive {
                 data_type: HDataType::I32,
             }),
         };
-        let back = from_arrow_array(&arr, &v3_lt).unwrap();
+        let back = from_arrow_array(&arr, &recursive_lt).unwrap();
         let expected = LogicalColumn::List {
             offsets: vec![0, 2, 3],
             values: Box::new(LogicalColumn::Primitive(ColumnData::I32(vec![1, 2, 3]))),

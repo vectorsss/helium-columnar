@@ -67,8 +67,8 @@ enum Commands {
     ///
     /// Direction is inferred from the file extensions of `input` and `-o`.
     /// Use `--from` and `--to` to override extension-based detection.
-    /// `--catalog DIR` opts into v6 (catalog-mode) output, or supplies the
-    /// resolver when reading a v4 / v6 input. `--delimiter` sets the CSV
+    /// `--catalog DIR` opts into catalog-mode output, or supplies the
+    /// resolver when reading a catalog-mode input. `--delimiter` sets the CSV
     /// field separator (e.g. `;` for European CSV).
     ///
     /// Supported format names: `csv`, `json`, `parquet`, `avro`, `avsc`, `he`.
@@ -99,7 +99,7 @@ enum Commands {
         /// Override the destination format (csv, json, parquet, avsc, he)
         #[arg(long, value_name = "FMT")]
         to: Option<String>,
-        /// Catalog directory for v6 (catalog-mode) output or resolving v4/v6 input
+        /// Catalog directory for catalog-mode output or resolving a catalog-mode input
         #[arg(long, value_name = "DIR")]
         catalog: Option<PathBuf>,
         /// CSV-only: error on List/Map/Union types instead of JSON-stringifying them.
@@ -179,7 +179,7 @@ enum Commands {
 
     /// Slice (project) a subset of columns from a `.he` file into a new `.he` file.
     ///
-    /// The output is a fresh self-contained (v5) file containing only the
+    /// The output is a fresh self-contained file containing only the
     /// listed columns, in the given order, preserving each column's encodings
     /// and the source's stripe boundaries. Columns are decoded and re-encoded
     /// (not a raw byte copy).
@@ -197,7 +197,7 @@ enum Commands {
         /// Comma-separated column names to keep, in output order.
         #[arg(long, value_name = "COL,...", value_delimiter = ',', required = true)]
         columns: Vec<String>,
-        /// Catalog directory for resolving a v4/v6 (catalog-mode) input.
+        /// Catalog directory for resolving a catalog-mode input.
         #[arg(long, value_name = "DIR")]
         catalog: Option<PathBuf>,
     },
@@ -207,7 +207,7 @@ enum Commands {
     Verify {
         /// `.he` file to verify
         file: PathBuf,
-        /// Catalog directory for resolving v4/v6 (catalog-mode) files
+        /// Catalog directory for resolving catalog-mode files
         #[arg(long, value_name = "DIR")]
         catalog: Option<PathBuf>,
     },
@@ -226,14 +226,14 @@ enum Commands {
         /// Emit machine-readable JSON instead of a markdown table.
         #[arg(long)]
         json: bool,
-        /// Catalog directory for v4/v6 (catalog-mode) files.
+        /// Catalog directory for catalog-mode files.
         #[arg(long, value_name = "DIR")]
         catalog: Option<PathBuf>,
     },
 
-    /// Catalog (shared-schema, v6 file format) administration.
+    /// Catalog (shared-schema) administration.
     ///
-    /// Manages the directory-backed schema catalog used by catalog-mode (v6)
+    /// Manages the directory-backed schema catalog used by catalog-mode
     /// `.he` files.
     #[command(arg_required_else_help = true, subcommand_required = true)]
     Catalog {

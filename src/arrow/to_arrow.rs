@@ -1,6 +1,6 @@
 //! `LogicalColumn → ArrayRef` conversion.
 //!
-//! Converts every Helium v2 and v3 logical-column variant to an Arrow
+//! Converts every Helium logical-column variant (legacy flat and recursive) to an Arrow
 //! [`ArrayRef`]. See the module-level doc in `super` for the type mapping
 //! table and null-handling semantics.
 
@@ -76,14 +76,14 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
         ))),
 
         // ------------------------------------------------------------------ //
-        // Nullable (v3) — compact inner, expanded Arrow representation       //
+        // Nullable (recursive) — compact inner, expanded Arrow representation       //
         // ------------------------------------------------------------------ //
         (LogicalColumn::Nullable { present, value }, LogicalType::Nullable { inner }) => {
             to_arrow_nullable(present, value, inner)
         }
 
         // ------------------------------------------------------------------ //
-        // v2 NullablePrim → same as Nullable<Primitive>                      //
+        // legacy flat NullablePrim → same as Nullable<Primitive>                      //
         // ------------------------------------------------------------------ //
         (
             LogicalColumn::NullablePrim { present, values },
@@ -99,7 +99,7 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
         }
 
         // ------------------------------------------------------------------ //
-        // v2 NullableUtf8                                                     //
+        // legacy flat NullableUtf8                                                     //
         // ------------------------------------------------------------------ //
         (LogicalColumn::NullableUtf8 { present, strings }, LogicalType::NullableUtf8) => {
             let expanded = expand_nullable_strings(present, strings);
@@ -109,7 +109,7 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
         }
 
         // ------------------------------------------------------------------ //
-        // v2 NullableBinary                                                   //
+        // legacy flat NullableBinary                                                   //
         // ------------------------------------------------------------------ //
         (LogicalColumn::NullableBinary { present, blobs }, LogicalType::NullableBinary) => {
             let expanded = expand_nullable_binary(present, blobs);
@@ -119,14 +119,14 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
         }
 
         // ------------------------------------------------------------------ //
-        // List (v3) — offsets + inner values                                 //
+        // List (recursive) — offsets + inner values                                 //
         // ------------------------------------------------------------------ //
         (LogicalColumn::List { offsets, values }, LogicalType::List { inner }) => {
             to_arrow_list(offsets, values, inner)
         }
 
         // ------------------------------------------------------------------ //
-        // v2 ArrayOf → List<Primitive>                                        //
+        // legacy flat ArrayOf → List<Primitive>                                        //
         // ------------------------------------------------------------------ //
         (LogicalColumn::ArrayOf { offsets, values }, LogicalType::ArrayOf { data_type }) => {
             let inner_lt = LogicalType::Primitive {
@@ -137,7 +137,7 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
         }
 
         // ------------------------------------------------------------------ //
-        // v2 ArrayOfUtf8 → List<Utf8>                                        //
+        // legacy flat ArrayOfUtf8 → List<Utf8>                                        //
         // ------------------------------------------------------------------ //
         (LogicalColumn::ArrayOfUtf8 { offsets, strings }, LogicalType::ArrayOfUtf8) => {
             let inner_lt = LogicalType::Utf8;
@@ -146,7 +146,7 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
         }
 
         // ------------------------------------------------------------------ //
-        // Map (v3)                                                            //
+        // Map (recursive)                                                            //
         // ------------------------------------------------------------------ //
         (
             LogicalColumn::Map {
@@ -161,7 +161,7 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
         ) => to_arrow_map(offsets, keys, values, key_lt, val_lt),
 
         // ------------------------------------------------------------------ //
-        // Struct (v3)                                                         //
+        // Struct (recursive)                                                         //
         // ------------------------------------------------------------------ //
         (
             LogicalColumn::Struct { fields },
@@ -171,7 +171,7 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
         ) => to_arrow_struct(fields, spec_fields),
 
         // ------------------------------------------------------------------ //
-        // Union (v3) — dense union                                           //
+        // Union (recursive) — dense union                                           //
         // ------------------------------------------------------------------ //
         (
             LogicalColumn::Union { tags, variants },
@@ -181,7 +181,7 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
         ) => to_arrow_union(tags, variants, spec_variants),
 
         // ------------------------------------------------------------------ //
-        // Dictionary{inner} — v3 recursive                                   //
+        // Dictionary{inner} — recursive                                   //
         // ------------------------------------------------------------------ //
         (
             LogicalColumn::Dictionary {
@@ -189,7 +189,7 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
                 indices,
             },
             LogicalType::Dictionary { inner },
-        ) => to_arrow_dict_v3(dictionary, indices, inner),
+        ) => to_arrow_dict(dictionary, indices, inner),
 
         // ------------------------------------------------------------------ //
         // Semantic types                                                       //
@@ -561,7 +561,7 @@ fn make_zero_row(lt: &LogicalType) -> Result<LogicalColumn> {
             dictionary: Box::new(make_zero_row(inner)?),
             indices: vec![0],
         },
-        // v2 types shouldn't appear inside a Nullable<v3 type> in practice
+        // legacy flat types should not appear inside a Nullable<recursive type> in practice
         _ => {
             return Err(HeliumError::Format(format!(
                 "expand_nullable_generic: unsupported inner type {lt:?}"
@@ -840,10 +840,10 @@ fn to_arrow_union(
 }
 
 // ---------------------------------------------------------------------------
-// Dictionary{inner} — v3 recursive
+// Dictionary{inner} — recursive
 // ---------------------------------------------------------------------------
 
-/// Convert a Helium v3 `Dictionary { dictionary, indices }` to an Arrow
+/// Convert a Helium recursive `Dictionary { dictionary, indices }` to an Arrow
 /// `DictionaryArray<UInt32>`.
 ///
 /// The `dictionary` LogicalColumn is converted to an Arrow array via
@@ -851,7 +851,7 @@ fn to_arrow_union(
 /// inner type is not directly supported as an Arrow dictionary value type
 /// this returns a clear `HeliumError::Format("unsupported")` rather than a
 /// wrong mapping.
-fn to_arrow_dict_v3(
+fn to_arrow_dict(
     dictionary: &LogicalColumn,
     indices: &[u32],
     inner: &LogicalType,

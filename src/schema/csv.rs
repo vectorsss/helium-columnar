@@ -543,7 +543,7 @@ fn push_simple<'a>(
 /// - **Struct**: flattened to dotted sub-columns (`addr.street`, `addr.zip`).
 ///   Nested structs concatenate: `user.addr.street` etc. See
 ///   [`write_csv_with_options`] for the full flattening rules.
-/// - **List / Map / Union** (and v2 `ArrayOf`, `ArrayOfUtf8`): serialised as a
+/// - **List / Map / Union** (and legacy flat `ArrayOf`, `ArrayOfUtf8`): serialised as a
 ///   compact JSON string. This is a lossy representation — it round-trips
 ///   through JSON, not back through Helium's type system.
 ///

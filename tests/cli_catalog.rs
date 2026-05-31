@@ -3,8 +3,8 @@
 //!
 //! # Coverage
 //!
-//! 1. `convert --catalog` + `verify --catalog`: CSV → v6 .he round-trip
-//! 2. `verify` without `--catalog` on a v6 file fails with "requires schema resolver"
+//! 1. `convert --catalog` + `verify --catalog`: CSV → catalog-mode .he round-trip
+//! 2. `verify` without `--catalog` on a catalog-mode file fails with "requires schema resolver"
 //! 3. `.he` → CSV with `--catalog` (export path with resolver)
 //! 4. `helium catalog list <DIR>` lists registered hashes (one per line, 64 hex chars)
 //! 5. `helium catalog verify <DIR>` clean → "OK: N schema(s)"
@@ -69,7 +69,7 @@ fn convert_and_verify_with_catalog() {
 
     assert!(he.exists(), ".he file was not created");
 
-    // The header must flag external-schema / catalog mode (HELIUM + v1 + 0x01).
+    // The header must flag external-schema / catalog mode (HELIUM + version byte 1 + flags 0x01).
     let bytes = fs::read(&he).unwrap();
     assert_eq!(
         &bytes[..8],
@@ -90,11 +90,11 @@ fn convert_and_verify_with_catalog() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. verify without --catalog on a v6 file fails
+// 2. verify without --catalog on a catalog-mode file fails
 // ---------------------------------------------------------------------------
 
 #[test]
-fn verify_v6_without_catalog_fails_with_resolver_error() {
+fn verify_without_catalog_fails_with_resolver_error() {
     let dir = TempDir::new().unwrap();
     let cat_dir = dir.path().join("catalog");
     fs::create_dir_all(&cat_dir).unwrap();
@@ -102,7 +102,7 @@ fn verify_v6_without_catalog_fails_with_resolver_error() {
     let csv = write_csv_fixture(&dir);
     let he = dir.path().join("out.he");
 
-    // Create a v6 file.
+    // Create a catalog-mode file.
     helium()
         .arg("convert")
         .arg(&csv)
@@ -127,11 +127,11 @@ fn verify_v6_without_catalog_fails_with_resolver_error() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn export_v6_he_to_csv_with_catalog() {
+fn export_catalog_he_to_csv() {
     let dir = TempDir::new().unwrap();
     let cat_dir = dir.path().join("catalog");
 
-    // Write a v6 file via the API directly (no CLI for write, use library).
+    // Write a catalog-mode file via the API directly (no CLI for write, use library).
     let schema = Schema::new(vec![
         ColumnSpec::primitive(
             "x",

@@ -1,5 +1,5 @@
-//! Round-trip tests for `LogicalType::Map` (§5.3) plus carry-over regression
-//! tests from §5.2 review (recursive validation through containers).
+//! Round-trip tests for `LogicalType::Map` plus carry-over regression
+//! tests for recursive validation through containers.
 //!
 //! Tests covered:
 //! - `Map<Utf8, Primitive>` basic round-trip
@@ -60,7 +60,7 @@ fn roundtrip(spec: ColumnSpec, data: LogicalColumn) -> LogicalColumn {
 }
 
 // ---------------------------------------------------------------------------
-// §5.3: Map<Utf8, Primitive>
+// Map<Utf8, Primitive>
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -151,7 +151,7 @@ fn map_primitive_to_primitive_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.3: Map<Utf8, Struct>
+// Map<Utf8, Struct>
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -224,7 +224,7 @@ fn map_utf8_to_struct_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.3: empty maps mixed with non-empty rows
+// empty maps mixed with non-empty rows
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -269,7 +269,7 @@ fn map_empty_rows_mixed_with_populated() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.3: duplicate keys preserved (Avro semantics)
+// duplicate keys preserved (Avro semantics)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -315,7 +315,7 @@ fn map_duplicate_keys_preserved() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.3: row_count for Map
+// row_count for Map
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -340,7 +340,7 @@ fn map_row_count() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.3: physical_fields dotted-path names
+// physical_fields dotted-path names
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -383,7 +383,7 @@ fn map_physical_fields_primitive_to_struct() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.3: expected_encodings_len for Map
+// expected_encodings_len for Map
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -428,7 +428,7 @@ fn map_expected_encodings_len() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.3: schema JSON "kind": "map" tag round-trip
+// schema JSON "kind": "map" tag round-trip
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -468,7 +468,7 @@ fn map_schema_json_kind_tag() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.3: multi-stripe concat for Map
+// multi-stripe concat for Map
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -534,7 +534,7 @@ fn map_multi_stripe_concat() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.3: validation — key type restriction
+// validation — key type restriction
 // ---------------------------------------------------------------------------
 
 #[test]

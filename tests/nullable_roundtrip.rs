@@ -1,5 +1,5 @@
-//! Round-trip tests for `LogicalType::Nullable` (§5.4) plus carry-over
-//! regression tests from §5.3 review.
+//! Round-trip tests for `LogicalType::Nullable` plus carry-over
+//! regression tests.
 
 use std::io::Cursor;
 
@@ -41,7 +41,7 @@ fn roundtrip(spec: ColumnSpec, data: LogicalColumn) -> LogicalColumn {
 }
 
 // ---------------------------------------------------------------------------
-// §5.4: Nullable(Primitive) — all-null, all-present, mixed
+// Nullable(Primitive) — all-null, all-present, mixed
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -126,7 +126,7 @@ fn nullable_primitive_mixed() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.4: Nullable(Struct)
+// Nullable(Struct)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -183,7 +183,7 @@ fn nullable_struct_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.4: Struct { f: Nullable(T) }
+// Struct { f: Nullable(T) }
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -237,7 +237,7 @@ fn struct_with_nullable_field() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.4: Nullable(List<T>)
+// Nullable(List<T>)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -294,7 +294,7 @@ fn nullable_list_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.4: List<Nullable<T>>
+// List<Nullable<T>>
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -353,7 +353,7 @@ fn list_of_nullable_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.4: schema JSON "kind": "nullable" tag round-trip
+// schema JSON "kind": "nullable" tag round-trip
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -378,7 +378,7 @@ fn nullable_schema_json_kind_tag() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.4: expected_encodings_len for Nullable
+// expected_encodings_len for Nullable
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -436,7 +436,7 @@ fn nullable_expected_encodings_len() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.4: physical_fields for Nullable
+// physical_fields for Nullable
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -474,7 +474,7 @@ fn nullable_struct_physical_fields() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.4: multi-stripe concat
+// multi-stripe concat
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -526,11 +526,11 @@ fn nullable_multi_stripe_concat() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.4: v2 back-compat
+// legacy flat back-compat
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v2_nullable_prim_remains_readable() {
+fn flat_nullable_prim_remains_readable() {
     // present coders for U8: need leb128 → zstd
     let spec = ColumnSpec::nullable_prim("v", DataType::I32, present_coders(), delta_leb_zstd());
     let schema = Schema::new(vec![spec]);
@@ -565,7 +565,7 @@ fn v2_nullable_prim_remains_readable() {
 }
 
 #[test]
-fn v2_nullable_utf8_remains_readable() {
+fn flat_nullable_utf8_remains_readable() {
     let spec = ColumnSpec::nullable_utf8("s", present_coders(), delta_leb_zstd(), zstd_only());
     let schema = Schema::new(vec![spec]);
     let reg = registry();
@@ -745,7 +745,7 @@ fn nullable_present_value_count_mismatch_in_decompose() {
 }
 
 // ---------------------------------------------------------------------------
-// Carry-over #2 (from §5.3 review): depth cap for Map
+// Carry-over #2: depth cap for Map
 // ---------------------------------------------------------------------------
 
 /// Build a 65-deep Map<Utf8, Map<Utf8, ...Map<Utf8, I32>...>> structure.

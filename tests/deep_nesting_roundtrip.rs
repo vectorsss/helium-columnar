@@ -1,6 +1,6 @@
-//! §5.8 — Deep-nesting + parity tests.
+//! Deep-nesting + parity tests.
 //!
-//! This file covers four of the five §5.8 acceptance items (compression
+//! This file covers four of the five acceptance items (compression
 //! parity lives in `tests/compression_parity.rs`):
 //!
 //! 1. Round-trip on `Struct<List<Struct<Map<Utf8, List<Nullable<Primitive(F64)>>>>>>` (5 levels)
@@ -11,7 +11,7 @@
 //! 4. CRC detection on a single-byte flip — error names the failing leaf
 //!    via the dotted path embedded in the `reason` string
 //!
-//! The 5-level type below is the literal acceptance shape from PLAN_V2 §5.8
+//! The 5-level type below is the literal acceptance shape from the
 //! disambiguating notes. The bottom primitive is `F64` so the deepest
 //! pipeline exercises Gorilla, the float-time-series coder.
 
@@ -203,7 +203,7 @@ fn deep_5_level_roundtrip() {
 // 2. Column pruning — top-level logical column granularity
 // ---------------------------------------------------------------------------
 //
-// **Gap note**: §5.8 asks for "leaf granularity" pruning (read
+// **Gap note**: leaf-granularity pruning (read
 // `user.address.zip` touches only that leaf's bytes). The current public
 // reader API (`HeliumReader::read_column` / `read_column_at_stripe`) only
 // supports pruning at the top-level logical column. Adding leaf-level reads
@@ -358,7 +358,7 @@ fn deep_schema_multi_stripe() {
     assert_eq!(r3, stripe3);
 
     // Whole-file read concatenates across stripes via concat_logical_columns
-    // (the deeply-recursive concat path covered by §5.1–§5.5 work).
+    // (the deeply-recursive concat path).
     let all = reader.read_column("rec").expect("read_column concat");
     let LogicalColumn::Struct { fields } = all else {
         panic!("expected concatenated Struct");
@@ -378,7 +378,7 @@ fn deep_schema_multi_stripe() {
 // 4. CRC detection — single-byte flip in a leaf surfaces with leaf path
 // ---------------------------------------------------------------------------
 
-/// Parse the v2 file's body region [body_start, body_end) from the raw bytes.
+/// Parse the file's body region [body_start, body_end) from the raw bytes.
 ///
 /// File shape: `magic(8) | schema_len(4 LE) | schema_json | body | footer_json |
 /// footer_len(8 LE) | footer_crc(4 LE) | magic(8)`.
@@ -390,7 +390,7 @@ fn body_region(bytes: &[u8]) -> (usize, usize) {
     let schema_len =
         u32::from_le_bytes(bytes[8..12].try_into().expect("schema_len slice")) as usize;
     let body_start = 12 + schema_len;
-    // trailer is 20 bytes for v2: footer_len(8) + footer_crc(4) + magic(8)
+    // trailer is 20 bytes: footer_len(8) + footer_crc(4) + magic(8)
     let trailer_start = bytes.len() - 20;
     // footer_len at bytes[trailer_start..trailer_start+8]
     let footer_len = u64::from_le_bytes(
@@ -443,7 +443,7 @@ fn crc_flip_in_deep_leaf_surfaces_corrupted_with_leaf_path() {
                 pinpointed,
                 "Corrupted reason must include a leaf dotted-path; got: {reason}"
             );
-            // CRC mismatch wording for the v2 path
+            // CRC mismatch wording for the file-format path
             assert!(
                 reason.contains("CRC32C") || reason.contains("mismatch"),
                 "should mention CRC32C mismatch; got: {reason}"

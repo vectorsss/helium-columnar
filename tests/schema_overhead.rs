@@ -1,13 +1,12 @@
-//! §6.4 Bencher — Schema-overhead corpus report.
+//! Bencher — schema-overhead corpus report.
 //!
-//! Measures `Schema::to_json()` byte count (raw, v2-equivalent) vs
-//! `zstd::encode_all(raw, 3)` byte count (compressed, v3 on-disk) across
-//! a representative corpus.
+//! Measures `Schema::to_json()` byte count (raw) vs `zstd::encode_all(raw, 3)`
+//! byte count (compressed, as stored on disk) across a representative corpus.
 //!
 //! No data round-trip needed — this is a schema-only measurement.
 //!
 //! Run:
-//!   cargo test -p helium-core --test v4_schema_overhead --release -- --nocapture
+//!   cargo test --test schema_overhead --release -- --nocapture
 
 use helium::{CoderSpec, ColumnSpec, DataType, FieldSpec, LogicalType, Schema};
 
@@ -35,7 +34,7 @@ fn gorilla_zstd() -> Vec<CoderSpec> {
 // Schema builders — one per shape
 // ---------------------------------------------------------------------------
 
-/// Shape A — Server Log (v3 recursive form from v3_parity_corpus).
+/// Shape A — Server Log (recursive form).
 /// Struct { ts:I64, user_id:I64, level:Utf8, message:Utf8,
 ///          score:Nullable(F64), tags:List(Utf8) }
 fn schema_server_log() -> Schema {
@@ -62,7 +61,7 @@ fn schema_server_log() -> Schema {
     )])
 }
 
-/// Shape B — Transaction Event (v3 recursive).
+/// Shape B — Transaction Event (recursive).
 /// Struct { id:Utf8, amount:Binary, currency:Utf8,
 ///          parent_id:Nullable(Utf8), metadata:List(Utf8) }
 fn schema_transaction_event() -> Schema {
@@ -92,7 +91,7 @@ fn schema_transaction_event() -> Schema {
     )])
 }
 
-/// Shape C — Sensor Reading (v3 recursive).
+/// Shape C — Sensor Reading (recursive).
 /// Struct { device_id:Utf8, readings:List<Struct{key:Utf8, value:F64}> }
 fn schema_sensor_reading() -> Schema {
     let inner = LogicalType::Struct {
@@ -111,7 +110,7 @@ fn schema_sensor_reading() -> Schema {
     )])
 }
 
-/// Shape D — String-Heavy MR Record (v3 recursive).
+/// Shape D — String-Heavy MR Record (recursive).
 /// Struct { request_id, method, path, status_text, tags:List(Utf8), notes }
 fn schema_string_heavy_mr() -> Schema {
     Schema::new(vec![ColumnSpec::struct_col(
@@ -132,7 +131,7 @@ fn schema_string_heavy_mr() -> Schema {
 }
 
 /// Shape E — Builder sanity shape (8 flat columns, the shape that produced
-/// the 80.3% headline). Reproduced exactly from `file_format_v3.rs` so
+/// the 80.3% headline). Reproduced exactly from the file-format mode tests so
 /// readers can cross-check.
 fn schema_builder_sanity_8col() -> Schema {
     Schema::new(vec![
@@ -343,9 +342,9 @@ fn measure(shape: &'static str, schema: Schema) -> Measurement {
 #[test]
 fn v4_schema_overhead_corpus() {
     let results = vec![
-        measure("Server Log (v3 struct, 1-col)", schema_server_log()),
+        measure("Server Log (recursive struct, 1-col)", schema_server_log()),
         measure(
-            "Transaction Event (v3 struct, 1-col)",
+            "Transaction Event (recursive struct, 1-col)",
             schema_transaction_event(),
         ),
         measure(
@@ -353,14 +352,14 @@ fn v4_schema_overhead_corpus() {
             schema_sensor_reading(),
         ),
         measure(
-            "String-Heavy MR (v3 struct, 1-col)",
+            "String-Heavy MR (recursive struct, 1-col)",
             schema_string_heavy_mr(),
         ),
         measure("Builder sanity 8-col flat", schema_builder_sanity_8col()),
         measure("Wide flat 50-col", schema_wide_flat_50col()),
         measure("Deep nesting (5 levels)", schema_deep_nesting()),
         measure(
-            "Avro analytics event (v3 struct)",
+            "Avro analytics event (recursive struct)",
             schema_avro_analytics_event(),
         ),
     ];

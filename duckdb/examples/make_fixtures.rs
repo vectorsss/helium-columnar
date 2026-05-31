@@ -3,7 +3,7 @@
 //! values straddle stripe and chunk boundaries.
 //!
 //! Used by `smoke.sh` to exercise the DuckDB extension's `Map` writer and the
-//! absolute-row indexing of the v3 `Nullable` read path.
+//! absolute-row indexing of the recursive `Nullable` read path.
 //!
 //! Usage: `make_fixtures <map_out.he> <nullable_out.he>`
 

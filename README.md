@@ -8,7 +8,7 @@ JSON-driven schemas, a versioned `.he` file format with column pruning, a
 DataFusion `TableProvider` so any `.he` file is queryable via SQL, and a
 built-in bench suite.
 
-**On ClickBench (100 k rows × 105 cols)**: a Helium catalog-mode (v6)
+**On ClickBench (100 k rows × 105 cols)**: a Helium catalog-mode
 optimized file is **7.46 MB** vs Parquet+zstd's **8.93 MB** (~**16% smaller**)
 and beats pure-zstd-on-raw-bytes (7.56 MB) by ~1%. **`SELECT count(*)`
 answers in 28 ms** (metadata-only) and stripe-level filter pushdown skips
@@ -40,7 +40,7 @@ helium slice events.he -o subset.he --columns ts,user_id,event_type
 # 3. Inspect what you got.
 helium stats events.he --no-values
 # File:     events.he
-# Format:   v5
+# Format:   v1
 # Size:     2,398,712 bytes total
 #   Schema header: 932 bytes
 #   Body:          2,394,288 bytes
@@ -265,7 +265,7 @@ either:
 - `BlockCoder` — needs the whole buffer before emitting output (zstd, lz4,
   pcodec, bit-packing with auto width, deltamin, Elias-Fano)
 
-This split is the framework's central abstraction. See design §2.1.
+This split is the framework's central abstraction.
 
 ### Pipeline
 
@@ -774,7 +774,7 @@ a **zero-copy** operation: the already-encoded leaf bytes are copied
 verbatim and each leaf's stored CRC, min/max, null-count and containment
 filter are reused from the footer — no coder runs, no stats are recomputed.
 Stripe boundaries are preserved, every logical type is supported (including
-`Dictionary`), and the output is a fresh self-contained v5 file.
+`Dictionary`), and the output is a fresh self-contained file.
 
 ```rust
 let mut reader = HeliumReader::new(File::open("events.he")?, &registry)?;
@@ -785,7 +785,7 @@ reader.project_to(&["ts", "user_id", "event_type"], out, &registry)?;
 
 ```bash
 helium slice events.he -o subset.he --columns ts,user_id,event_type
-#   --catalog ./catalog   # only needed to READ a v6 (catalog-mode) input
+#   --catalog ./catalog   # only needed to READ a catalog-mode input
 ```
 
 `Schema::project(&["a", "b"])` builds the subset schema on its own if you
@@ -871,7 +871,7 @@ registry.register("my_coder", |_spec, _input_type| {
 });
 ```
 
-Guidelines (from design §6):
+Guidelines:
 
 1. Pick a **stable string ID**. Once any `.he` file is written with it,
    never reuse or repurpose the ID.
@@ -1007,16 +1007,25 @@ matters for coder selection.
 
 ## File format on disk
 
-`HeliumWriter::new` emits **v5** (the default, self-contained). The opt-in
-`HeliumWriter::with_catalog_ref` emits **v6** for catalog-mode writes
-(see the `catalog` module). `HeliumReader::new` accepts v5; v6 requires
-`HeliumReader::new_with_resolver`.
+Every file begins with an 8-byte header: a stable 6-byte magic `b"HELIUM"`,
+a 1-byte format generation (`version`), and a 1-byte `flags`. The two
+**storage modes** are selected by a flag bit, not by separate format
+versions:
 
-The reader rejects any unknown or unsupported magic with `HeliumError::Format`
-— never silent corruption. (See the status note above: the `.he` format may
-change between 0.x minor versions; regenerate from source when upgrading.)
+- **Self-contained** (`flags = 0x00`, the default) — the schema JSON is
+  embedded in the header. Emitted by `HeliumWriter::new`; read by
+  `HeliumReader::new`.
+- **Catalog mode** (`flags` bit 0 set → `0x01`, opt-in) — the header carries
+  a 36-byte schema-hash reference instead of the embedded schema. Emitted by
+  `HeliumWriter::with_catalog_ref` (see the `catalog` module); read by
+  `HeliumReader::new_with_resolver`.
 
-### v5 layout (default, self-contained)
+The reader rejects any unknown or unsupported magic/version with
+`HeliumError::Format` — never silent corruption. (See the status note above:
+the `.he` format may change between 0.x minor versions; regenerate from
+source when upgrading.)
+
+### Self-contained layout (default)
 
 The schema JSON in the header **and** the footer JSON are both
 zstd-compressed. `footer_len` is the compressed length; `footer_crc32c` is
@@ -1024,7 +1033,9 @@ over the compressed bytes (so corruption is caught before zstd
 decompression, mirroring how the schema header is integrity-checked).
 
 ```
-[0..8]          magic = b"HELIUM\x00\x05"
+[0..6]          magic = b"HELIUM"
+[6]             version: u8
+[7]             flags: u8  (0x00 = self-contained)
 [8..12]         schema_len: u32 LE          (length of the COMPRESSED schema bytes)
 [12..12+S]      zstd-compressed schema JSON
 
@@ -1047,40 +1058,43 @@ body_start = 12 + S
                 }
 [tail-20..-12]  footer_len: u64 LE          (compressed footer length)
 [tail-12..-8]   footer_crc32c: u32 LE       (CRC32C of the compressed footer bytes)
-[tail-8..]      magic = b"HELIUM\x00\x05"
+[tail-8..]      the 8-byte header, echoed as a completeness sentinel
 ```
 
 Footer-compression savings on a wide schema (50 columns × 3 stripes):
 9.6 KB raw → 0.7 KB on disk (~92%).
 
-### v6 layout (opt-in catalog mode)
+### Catalog-mode layout (opt-in)
 
-Same as v5 except the header carries a 36-byte schema-hash slot instead of
-the embedded schema; the footer is zstd-compressed identically to v5.
+Same as self-contained except `flags` has bit 0 set and the header carries a
+36-byte schema-hash slot instead of the embedded schema; the footer is
+zstd-compressed identically.
 
 ```
-[0..8]          magic = b"HELIUM\x00\x06"
+[0..6]          magic = b"HELIUM"
+[6]             version: u8
+[7]             flags: u8  (bit 0 set = catalog mode)
 [8..40]         BLAKE3 hash of canonicalized schema JSON (32 bytes raw)
 [40..44]        CRC32C of the 32-byte hash (u32 LE)
 
 body_start = 44
 
 [body_start..]  per-stripe runs of physical-column encoded bytes
-                (identical to v5)
+                (identical to self-contained)
 
-[..tail-20]     zstd-compressed footer JSON (identical to v5)
+[..tail-20]     zstd-compressed footer JSON (identical to self-contained)
 [tail-20..-12]  footer_len: u64 LE          (compressed footer length)
 [tail-12..-8]   footer_crc32c: u32 LE
-[tail-8..]      magic = b"HELIUM\x00\x06"
+[tail-8..]      the 8-byte header, echoed as a completeness sentinel
 ```
 
 Catalog-mode files do not embed the schema JSON — readers resolve the
 32-byte hash via a caller-provided closure (typically a filesystem lookup
 in `<catalog-dir>/<hash-hex>.json`). See the `catalog` module. The
 schema-slot CRC32C catches single-bit hash corruption with a clearer
-"v6 schema-slot CRC mismatch" error than the per-column body CRC would.
+schema-slot CRC mismatch error than the per-column body CRC would.
 
-> The reader accepts v5 and v6; any other magic is rejected with
+> Any unrecognized magic or unsupported version is rejected with
 > `HeliumError::Format`.
 
 ### Why compress the schema and footer?

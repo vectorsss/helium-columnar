@@ -14,7 +14,7 @@ use helium::{CoderRegistry, HeliumReader};
 /// corruption surfaces as a [`helium::HeliumError::Corrupted`] error.
 ///
 /// When `catalog_dir` is `Some`, uses [`HeliumReader::new_with_resolver`] so
-/// v4/v6 catalog-mode files are readable.
+/// catalog-mode files are readable.
 ///
 /// On success, prints a summary:
 /// ```text

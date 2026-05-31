@@ -18,7 +18,7 @@ helium-core/                ← repo root (single crate, name = "helium")
 │   ├── coders/             ← concrete coder implementations
 │   ├── schema/             ← format adapters (Avro / CSV / JSON / Parquet → Schema)
 │   ├── optimizer/          ← measured-optimal encoding picker
-│   ├── catalog/            ← opt-in v4 shared-schema catalog
+│   ├── catalog/            ← opt-in shared-schema catalog
 │   └── cli/                ← subcommand handlers (only compiled into the binary)
 ├── tests/                  ← all integration tests (was: per-crate tests merged)
 ├── benches/
@@ -62,9 +62,9 @@ cargo run --release --features cli -- convert events.json -o events.he          
 cargo run --release --features cli -- convert in.txt --from csv -o out.he                    # --from/--to override extension
 cargo run --release --features cli -- convert euro.csv -o euro.he --delimiter ';'            # non-comma CSV (European-style)
 cargo run --release --features cli -- convert events.csv -o events.he --stripe-rows 10000    # multi-stripe + streaming (bounded memory)
-cargo run --release --features cli -- convert events.csv -o events.he --catalog ./catalog    # write v6 (catalog mode)
-cargo run --release --features cli -- verify file.he                                          # v5 (self-contained)
-cargo run --release --features cli -- verify file.he --catalog ./catalog                     # v6 (catalog mode)
+cargo run --release --features cli -- convert events.csv -o events.he --catalog ./catalog    # write catalog mode
+cargo run --release --features cli -- verify file.he                                          # self-contained
+cargo run --release --features cli -- verify file.he --catalog ./catalog                     # catalog mode
 cargo run --release --features cli -- slice events.he -o subset.he --columns ts,user_id,label # column projection → new .he
 cargo run --release --features cli -- catalog list ./catalog                                  # list registered schema hashes
 cargo run --release --features cli -- catalog verify ./catalog                                # consistency check
@@ -98,13 +98,13 @@ Rust edition is **2024**. Acceptance bar: `cargo test --all-features` green AND 
 
 These supersede the parent file where they conflict.
 
-### File format is v5 by default, with opt-in v6
+### File format: stable header, two storage modes
 
-- `HeliumWriter::new` emits **v5** (magic `HELIUM\x00\x05`). Both the schema JSON in the header and the footer JSON are zstd-compressed (~92% savings on wide schemas). The on-disk `footer_crc32c` is over the *compressed* bytes — corruption is caught before decompression.
-- `HeliumReader::new` accepts **v5** (and **v6** via `new_with_resolver`). **Formats v1–v4 were removed before 1.0** — Helium makes no on-disk stability promise at 0.x; regenerate old files from source. Reader rejects v1–v4 magics with `HeliumError::Format`.
-- `HeliumWriter::with_catalog_ref` opts into **v6** (magic `HELIUM\x00\x06`) = catalog hash header + compressed footer. v6 stores a 32-byte BLAKE3 of the canonicalized schema JSON plus a CRC32C of the hash in the header; readers use `HeliumReader::new_with_resolver` to fetch the schema by hash. See `src/catalog/`. v6 is **never** the default — writers must require an explicit catalog handle.
-- The error message for "resolver missing" reads "v6 file requires schema resolver but none was provided".
-- Schema canonicalization (used by v6 hashing) lives in `src/core/canonicalize.rs` and uses `unicode-normalization` for NFC. Bumping that dep major would risk hash drift on non-ASCII field names — treat it as frozen.
+- Every file starts with an 8-byte header: the stable 6-byte magic `b"HELIUM"`, a 1-byte format version (`FORMAT_VERSION = 1`), and a 1-byte flags byte. The reader checks the magic, then the version, then rejects any unknown *incompatible* flag bits (compatible high-nibble flags are ignored if unknown). The storage mode is selected by flag bit 0.
+- **Self-contained mode** (`flags = 0x00`, the default) — `HeliumWriter::new` embeds the schema JSON in the header. Both the schema JSON and the footer JSON are zstd-compressed (~92% savings on wide schemas). The on-disk `footer_crc32c` is over the *compressed* bytes — corruption is caught before decompression. Read with `HeliumReader::new`.
+- **Catalog mode** (`flags` bit 0 set → `0x01`) — `HeliumWriter::with_catalog_ref` opts in: the header carries a 32-byte BLAKE3 of the canonicalized schema JSON plus a CRC32C of that hash instead of an embedded schema, with a compressed footer. Readers use `HeliumReader::new_with_resolver` to fetch the schema by hash. See `src/catalog/`. Catalog mode is **never** the default — writers must supply an explicit catalog handle.
+- The error message when a catalog-mode file is opened without a resolver reads "catalog-mode file requires a schema resolver but none was provided".
+- Schema canonicalization (used by catalog-mode hashing) lives in `src/core/canonicalize.rs` and uses `unicode-normalization` for NFC. Bumping that dep major would risk hash drift on non-ASCII field names — treat it as frozen.
 
 ### Where the plan lives
 
@@ -119,15 +119,15 @@ These supersede the parent file where they conflict.
 
 When adding a coder: stable string ID (frozen the moment any `.he` ships with it), specialize on `input_type: DataType` in the factory, **new ID for new parameter shapes** (`bitpack_fixed` vs `bitpack_auto` is the canonical split — don't add boolean switches to one ID).
 
-### Recursive `LogicalType` (v3 schema vocabulary)
+### Recursive `LogicalType` (recursive schema vocabulary)
 
-The parent file lists v2 variants (`NullablePrim`, `ArrayOf`, ...). v3 adds recursive `Struct`, `List`, `Map`, `Nullable`, `Union` that compose. All v3 variants ship as **struct variants** (`Variant { field: Box<LogicalType> }`), not newtype, because `#[serde(tag = "kind")]` cannot wrap newtypes. The `"kind"` value and inner field names are wire-format-frozen the same way coder IDs are — they appear in every `.he` schema JSON.
+The parent file lists the legacy flat variants (`NullablePrim`, `ArrayOf`, ...). The recursive variants — `Struct`, `List`, `Map`, `Nullable`, `Union` — compose. All recursive variants ship as **struct variants** (`Variant { field: Box<LogicalType> }`), not newtype, because `#[serde(tag = "kind")]` cannot wrap newtypes. The `"kind"` value and inner field names are wire-format-frozen the same way coder IDs are — they appear in every `.he` schema JSON.
 
-`tests/v2_back_compat.rs` is the grep-able boundary that proves every v2 variant remains readable. New schemas should use v3 forms (see README §"v2 → v3 schema migration").
+`tests/schema_back_compat.rs` is the grep-able boundary that proves every legacy flat variant remains readable. New schemas should use the recursive forms.
 
 ### Dict columns + multi-stripe gotcha
 
-`HeliumReader::read_column("dict_col")` errors on multi-stripe files because each stripe carries its own dictionary. Use `read_column_at_stripe(name, stripe_idx)` and handle each stripe's dictionary explicitly. Tests covering this live in `tests/file_format.rs` / `file_format_v3.rs`.
+`HeliumReader::read_column("dict_col")` errors on multi-stripe files because each stripe carries its own dictionary. Use `read_column_at_stripe(name, stripe_idx)` and handle each stripe's dictionary explicitly. Tests covering this live in `tests/file_format.rs` / `file_format_modes.rs`.
 
 ## Anti-patterns (do not propose without new evidence)
 

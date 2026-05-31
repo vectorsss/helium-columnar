@@ -1,8 +1,8 @@
-//! §5.8 — Compression-ratio parity between v3 recursive and v2 flat schemas.
+//! Compression-ratio parity between recursive and flat schemas.
 //!
-//! Acceptance criterion (PLAN_V2 §5.8): the recursive form must compress
-//! within **5%** of the manually-flattened v2 form on MR-shape data. If the
-//! recursive form ever regresses past that threshold, the v3 nested-types
+//! Acceptance criterion: the recursive form must compress
+//! within **5%** of the manually-flattened flat form on MR-shape data. If the
+//! recursive form ever regresses past that threshold, the recursive nested-types
 //! work has accidentally introduced encoding overhead and the production
 //! anchor (Avro+zstd replacement, project memory `project_avro_replacement.md`)
 //! is at risk.
@@ -116,11 +116,11 @@ fn make_log_data(n: usize) -> LogData {
 }
 
 // ---------------------------------------------------------------------------
-// Schema construction — recursive (v3) vs flat (v2)
+// Schema construction — recursive vs flat
 // ---------------------------------------------------------------------------
 
-/// Flat v2 schema — one top-level column per leaf field.
-fn flat_v2_schema() -> Schema {
+/// Flat schema — one top-level column per leaf field.
+fn flat_schema() -> Schema {
     Schema::new(vec![
         ColumnSpec::primitive("ts", DataType::I64, delta_leb_zstd()),
         ColumnSpec::primitive("user_id", DataType::I64, delta_leb_zstd()),
@@ -131,9 +131,9 @@ fn flat_v2_schema() -> Schema {
     ])
 }
 
-/// Recursive v3 schema — one top-level Struct wrapping the same fields,
+/// Recursive schema — one top-level Struct wrapping the same fields,
 /// using the new Nullable / List wrappers for the optional / list fields.
-fn recursive_v3_schema() -> Schema {
+fn recursive_schema() -> Schema {
     let fields = vec![
         FieldSpec::primitive("ts", DataType::I64, delta_leb_zstd()),
         FieldSpec::primitive("user_id", DataType::I64, delta_leb_zstd()),
@@ -159,10 +159,10 @@ fn recursive_v3_schema() -> Schema {
 // Writer drivers — same data into both schemas
 // ---------------------------------------------------------------------------
 
-fn write_flat_v2(data: &LogData) -> Vec<u8> {
+fn write_flat(data: &LogData) -> Vec<u8> {
     let reg = registry();
     let mut buf = Cursor::new(Vec::<u8>::new());
-    let mut w = HeliumWriter::new(&mut buf, flat_v2_schema(), &reg).expect("flat writer");
+    let mut w = HeliumWriter::new(&mut buf, flat_schema(), &reg).expect("flat writer");
     w.write_column(
         "ts",
         LogicalColumn::Primitive(ColumnData::I64(data.ts.clone())),
@@ -197,10 +197,10 @@ fn write_flat_v2(data: &LogData) -> Vec<u8> {
     buf.into_inner()
 }
 
-fn write_recursive_v3(data: &LogData) -> Vec<u8> {
+fn write_recursive(data: &LogData) -> Vec<u8> {
     let reg = registry();
     let mut buf = Cursor::new(Vec::<u8>::new());
-    let mut w = HeliumWriter::new(&mut buf, recursive_v3_schema(), &reg).expect("recursive writer");
+    let mut w = HeliumWriter::new(&mut buf, recursive_schema(), &reg).expect("recursive writer");
 
     let log_struct = LogicalColumn::Struct {
         fields: vec![
@@ -246,8 +246,8 @@ fn recursive_compresses_within_5_percent_of_flat() {
     let n = 10_000;
     let data = make_log_data(n);
 
-    let flat_bytes = write_flat_v2(&data);
-    let recursive_bytes = write_recursive_v3(&data);
+    let flat_bytes = write_flat(&data);
+    let recursive_bytes = write_recursive(&data);
 
     let flat_len = flat_bytes.len() as f64;
     let recursive_len = recursive_bytes.len() as f64;
@@ -266,7 +266,7 @@ fn recursive_compresses_within_5_percent_of_flat() {
         overhead <= 0.05,
         "recursive form is {pct:.2}% larger than flat form (gate: ≤ 5.00%); \
          flat={flat_len} bytes, recursive={recursive_len} bytes — \
-         this fails §5.8 acceptance and risks the Avro-replacement anchor"
+         this fails the size acceptance bar and risks the Avro-replacement anchor"
     );
 }
 
@@ -283,8 +283,8 @@ fn flat_and_recursive_carry_same_leaf_byte_count() {
     // introspection API that doesn't exist publicly.
     let n = 1_000;
     let data = make_log_data(n);
-    let flat = write_flat_v2(&data);
-    let recursive = write_recursive_v3(&data);
+    let flat = write_flat(&data);
+    let recursive = write_recursive(&data);
 
     // The ABSOLUTE difference (bytes) should be small — dominated by schema
     // JSON differences, not by leaf encoding differences. For 1k rows of

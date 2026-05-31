@@ -8,7 +8,7 @@
 //! SELECT * FROM read_he('path/to/file.he') LIMIT 5;
 //! SELECT count(*) FROM read_he('path/to/file.he');
 //! SELECT col_a, col_b FROM read_he('path/to/file.he') WHERE col_a > 100;
-//! -- v6 catalog-mode files: pass the catalog directory by named parameter
+//! -- catalog-mode files: pass the catalog directory by named parameter
 //! SELECT * FROM read_he('path/to/file.he', catalog := '/path/to/catalog');
 //! ```
 //!
@@ -28,12 +28,12 @@
 //!   applies `WHERE` after the scan. See `docs/ROADMAP.md`.
 //!
 //! ## Type coverage
-//! - Flat: all primitives, `Utf8`, `Binary`, the v2 nullable/array variants,
+//! - Flat: all primitives, `Utf8`, `Binary`, the legacy flat nullable/array variants,
 //!   `Dictionary`, and the semantic types (`Decimal128`, `Date`, `Datetime`).
 //! - Nested: `Struct`, `List`, and `Map` map onto DuckDB STRUCT / LIST / MAP
-//!   vectors. `Union` and the v2 `ArrayOf*` legacy variants are still rejected
+//!   vectors. `Union` and the legacy flat `ArrayOf*` variants are still rejected
 //!   at bind time with a clear message.
-//! - Catalog-mode (v6) files are read by passing `catalog := '<dir>'`.
+//! - Catalog-mode files are read by passing `catalog := '<dir>'`.
 
 use std::cell::UnsafeCell;
 use std::fs::File;
@@ -60,7 +60,7 @@ use writer::write_column_window;
 pub struct HeBindData {
     /// Path to the `.he` file.
     path: String,
-    /// Optional catalog directory for v6 (catalog-mode) files. `None` for v5.
+    /// Optional catalog directory for catalog-mode files. `None` for self-contained files.
     catalog_dir: Option<String>,
     /// Column names, in schema order.
     col_names: Vec<String>,
@@ -121,7 +121,7 @@ unsafe impl Sync for HeInitData {}
 /// Table function implementation for `read_he(path VARCHAR [, catalog := VARCHAR])`.
 pub struct HeVTab;
 
-/// Build a reader for `path`, resolving v6 catalog-mode files through the
+/// Build a reader for `path`, resolving catalog-mode files through the
 /// catalog directory when one was supplied.
 fn open_reader(
     path: &str,
@@ -321,19 +321,19 @@ pub(crate) fn logical_type_to_duckdb(
         Utf8 => Ok(LogicalTypeHandle::from(LogicalTypeId::Varchar)),
         Binary => Ok(LogicalTypeHandle::from(LogicalTypeId::Blob)),
 
-        // v2 legacy array types — not yet supported
+        // legacy flat array types — not yet supported
         ArrayOf { .. } | ArrayOfUtf8 => Err(
-            "read_he: ArrayOf / ArrayOfUtf8 (v2 legacy) not yet supported; \
-             convert the schema to v3 List first with the helium CLI"
+            "read_he: ArrayOf / ArrayOfUtf8 (legacy flat) not yet supported; \
+             convert the schema to a recursive List first with the helium CLI"
                 .into(),
         ),
 
-        // v2 legacy nullable / dict
+        // legacy flat nullable / dict
         NullablePrim { data_type } => Ok(primitive_dt_to_duckdb(*data_type)),
         NullableUtf8 => Ok(LogicalTypeHandle::from(LogicalTypeId::Varchar)),
         NullableBinary => Ok(LogicalTypeHandle::from(LogicalTypeId::Blob)),
 
-        // v3 nullable wrapper — DuckDB columns are always nullable, unwrap the inner type
+        // recursive nullable wrapper — DuckDB columns are always nullable, unwrap the inner type
         Nullable { inner } => logical_type_to_duckdb(inner),
 
         // Dictionary maps to its inner value type (materialized on read).

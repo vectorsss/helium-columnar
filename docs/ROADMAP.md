@@ -52,7 +52,7 @@ randomly addressable.
 
 The two language bindings live in `python/` and `duckdb/` as independent Cargo
 projects (path-deps on `helium-columnar`, not published, gated by the `bindings`
-CI job). **helium-duckdb** can *read* the full v3 type set but cannot write or
+CI job). **helium-duckdb** can *read* the full recursive type set but cannot write or
 push down — that is its decisive next step. **pyhelium** has gained Arrow /
 pandas interop: `write_table` / `read_table` round-trip nullable, nested
 (Struct / List), and semantic (Date / Datetime / Decimal) columns, with
@@ -71,11 +71,11 @@ of that gap is now closed; what landed and what remains:
 - **One reader held open — done.** The reader is opened once per scan and held
   across stripes (in the init data), instead of re-opening the file per stripe.
 - **Nested types — done.** `Struct`, `List`, and `Map` map onto DuckDB
-  STRUCT / LIST / MAP vectors. `Union` and the v2 `ArrayOf` / `ArrayOfUtf8`
+  STRUCT / LIST / MAP vectors. `Union` and the legacy flat `ArrayOf` / `ArrayOfUtf8`
   legacy variants still error at bind time with a clear message.
-- **v6 catalog support — done.** `read_he(path, catalog := '…')` resolves the
-  schema through `HeliumReader::new_with_resolver`; v6 without the parameter
-  errors with the documented resolver message.
+- **Catalog-mode support — done.** `read_he(path, catalog := '…')` resolves the
+  schema through `HeliumReader::new_with_resolver`; a catalog-mode file without
+  the parameter errors with the documented resolver message.
 - **Correctness — done.** `smoke.sh` covers nullable + multi-stripe: a
   `Nullable<I64>` column whose nulls straddle stripe (5000) and chunk (2048)
   boundaries, verified by both aggregate sums and boundary spot-checks. This
@@ -158,7 +158,7 @@ Remaining:
 
 ## Format / catalog
 
-- The v6 shared-schema catalog is filesystem-backed. A networked / shared
+- The shared-schema catalog is filesystem-backed. A networked / shared
   catalog service is a possible direction for multi-writer deployments.
 
 ## StarRocks integration (external)

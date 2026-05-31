@@ -300,8 +300,7 @@ fn translate_int64(logical: Option<&PqLogical>, converted: ConvertedType) -> Log
                     PqTimeUnit::MICROS => TimeUnit::Micros,
                     PqTimeUnit::NANOS => TimeUnit::Nanos,
                 };
-                // Parquet `is_adjusted_to_UTC` true → timezone = Some("UTC")
-                // per the design doc mapping.
+                // Parquet `is_adjusted_to_UTC` true → timezone = Some("UTC").
                 let timezone = if *is_adjusted_to_u_t_c {
                     Some("UTC".to_string())
                 } else {
@@ -640,9 +639,9 @@ fn write_parquet_column(
                 .map(|_| ())
                 .map_err(|e| HeliumError::Format(format!("Parquet Binary write error: {e}")))
         }
-        // ── v3 Nullable: dispatch by inner type ───────────────────────────
-        // This is the path real callers hit: HeliumReader returns v3 LogicalColumn::Nullable
-        // for v3 LogicalType::Nullable, so write_parquet from a HeliumReader → CLI flow
+        // ── recursive Nullable: dispatch by inner type ───────────────────────────
+        // This is the path real callers hit: HeliumReader returns the recursive LogicalColumn::Nullable
+        // for the recursive LogicalType::Nullable, so write_parquet from a HeliumReader → CLI flow
         // lands here. The `value` box carries the *compacted* inner column (only the
         // non-null rows), which is exactly what parquet's write_batch wants:
         // `values.len() == count(def_level == max_def_level)`.
@@ -688,12 +687,12 @@ fn write_parquet_column(
                 }),
             }
         }
-        // ── v2 compat: NullablePrim ────────────────────────────────────────
+        // ── legacy flat compat: NullablePrim ────────────────────────────────────────
         (LogicalType::NullablePrim { .. }, LogicalColumn::NullablePrim { present, values }) => {
             let def_levels: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
             write_column_data(col, values, Some(&def_levels), col_name)
         }
-        // ── v2 compat: NullableUtf8 ───────────────────────────────────────
+        // ── legacy flat compat: NullableUtf8 ───────────────────────────────────────
         (LogicalType::NullableUtf8, LogicalColumn::NullableUtf8 { present, strings }) => {
             let def_levels: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
             let data: Vec<ByteArray> = strings
@@ -705,7 +704,7 @@ fn write_parquet_column(
                 .map(|_| ())
                 .map_err(|e| HeliumError::Format(format!("Parquet NullableUtf8 write error: {e}")))
         }
-        // ── v2 compat: NullableBinary ─────────────────────────────────────
+        // ── legacy flat compat: NullableBinary ─────────────────────────────────────
         (LogicalType::NullableBinary, LogicalColumn::NullableBinary { present, blobs }) => {
             let def_levels: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
             let data: Vec<ByteArray> = blobs
@@ -899,7 +898,7 @@ fn helium_logical_type_to_parquet_field(
                 inner
             ),
         }),
-        // v2 NullablePrim.
+        // legacy flat NullablePrim.
         LogicalType::NullablePrim { data_type } => {
             let (phys, conv) = helium_dt_to_parquet_physical(*data_type);
             let field = PqType::primitive_type_builder(name, phys)
@@ -911,7 +910,7 @@ fn helium_logical_type_to_parquet_field(
                 })?;
             Ok(Arc::new(field))
         }
-        // v2 NullableUtf8.
+        // legacy flat NullableUtf8.
         LogicalType::NullableUtf8 => {
             let field = PqType::primitive_type_builder(name, PqPhysical::BYTE_ARRAY)
                 .with_repetition(Repetition::OPTIONAL)
@@ -922,7 +921,7 @@ fn helium_logical_type_to_parquet_field(
                 })?;
             Ok(Arc::new(field))
         }
-        // v2 NullableBinary.
+        // legacy flat NullableBinary.
         LogicalType::NullableBinary => {
             let field = PqType::primitive_type_builder(name, PqPhysical::BYTE_ARRAY)
                 .with_repetition(Repetition::OPTIONAL)
@@ -1025,7 +1024,7 @@ mod writer_tests {
 
     #[test]
     fn write_parquet_nullable_column() {
-        // v3 shape — what HeliumReader actually returns for v3 Nullable schemas
+        // recursive shape — what HeliumReader actually returns for recursive Nullable schemas
         // and therefore what the CLI hands to write_parquet on real data.
         let lt = LogicalType::Nullable {
             inner: Box::new(LogicalType::Primitive {

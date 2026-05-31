@@ -35,7 +35,7 @@ impl fmt::Debug for Pipeline {
 
 impl Pipeline {
     /// Build a pipeline, validating both the non-block-then-block ordering rule
-    /// (design §2.2) and the input/output type chain (design §4.1).
+    /// and the input/output type chain.
     pub fn new(input_type: DataType, stages: Vec<StageCoder>) -> Result<Self> {
         let mut seen_block = false;
         for stage in &stages {
@@ -110,7 +110,7 @@ impl Pipeline {
 
     /// Decode by walking the pipeline in reverse. Each stage decodes its own
     /// input to exhaustion — intermediate row counts are not threaded through
-    /// this layer; that is a file-format concern (design §8.2) and will be
+    /// this layer; that is a file-format concern and will be
     /// added when the schema / stripe layer lands.
     pub fn decode(&self, input: ColumnData) -> Result<ColumnData> {
         if input.data_type() != self.output_type {

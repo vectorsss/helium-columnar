@@ -1,4 +1,4 @@
-//! Round-trip tests for `LogicalType::Struct` (§5.1).
+//! Round-trip tests for `LogicalType::Struct`.
 //!
 //! Tests covered:
 //! - flat struct (all primitive fields)
@@ -55,7 +55,7 @@ fn roundtrip_struct(spec: ColumnSpec, data: LogicalColumn) -> LogicalColumn {
 }
 
 // ---------------------------------------------------------------------------
-// §5.1 test: flat struct (all primitive fields)
+// flat struct (all primitive fields)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -105,7 +105,7 @@ fn flat_struct_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.1 test: 2-level nested struct
+// 2-level nested struct
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -174,7 +174,7 @@ fn nested_struct_two_levels_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.1 test: struct of mixed primitive / utf8
+// struct of mixed primitive / utf8
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -213,7 +213,7 @@ fn struct_mixed_primitive_utf8_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.1 test: empty field list
+// empty field list
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -259,7 +259,7 @@ fn empty_struct_file_roundtrip_zero_rows() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.1 test: schema JSON round-trip with serde(tag = "kind")
+// schema JSON round-trip with serde(tag = "kind")
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -312,7 +312,7 @@ fn nested_struct_schema_json_tag_preserved() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.1 test: physical_fields() dotted-path leaf names
+// physical_fields() dotted-path leaf names
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -363,7 +363,7 @@ fn physical_fields_empty_struct() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.1 test: multi-stripe write/read concatenation
+// multi-stripe write/read concatenation
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -538,7 +538,7 @@ fn struct_field_count_mismatch_in_decompose() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.1 test: row_count() for Struct
+// row_count() for Struct
 // ---------------------------------------------------------------------------
 
 #[test]

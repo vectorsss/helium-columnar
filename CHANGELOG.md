@@ -54,13 +54,14 @@ Initial public release.
 
 ### File format (`.he`)
 
-- Versioned container: **v5** (self-contained, default) and **v6** (opt-in
-  catalog mode). Schema header and footer are zstd-compressed; per-column and
-  footer CRC32C integrity checks.
+- Two storage modes selected by a flags byte: **self-contained** (default,
+  schema embedded) and **catalog mode** (opt-in, external schema). Schema
+  header and footer are zstd-compressed; per-column and footer CRC32C
+  integrity checks.
 - Multi-stripe (row groups) with per-stripe min/max, null counts, and
   containment (DistinctSet / Bloom) filters for predicate pushdown.
 - Column pruning on read and **zero-copy column projection** ("slice").
-- Opt-in shared-schema catalog (hash-referenced v6 files).
+- Opt-in shared-schema catalog (hash-referenced catalog-mode files).
 
 ### Query
 

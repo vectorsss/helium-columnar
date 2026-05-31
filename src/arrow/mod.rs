@@ -28,11 +28,11 @@
 //! | `Map<Utf8, V>` | `Map(Struct{ keys: Utf8, values: V })` |
 //! | `Struct { fields }` | `Struct(fields)` |
 //! | `Union { variants }` | `Union(variants, dense)` — dense union |
-//! | `NullablePrim` (v2) | same as `Nullable<Primitive>` |
-//! | `NullableUtf8` (v2) | same as `Nullable<Utf8>` |
-//! | `NullableBinary` (v2) | same as `Nullable<Binary>` |
-//! | `ArrayOf` (v2) | same as `List<Primitive>` |
-//! | `ArrayOfUtf8` (v2) | same as `List<Utf8>` |
+//! | `NullablePrim` (legacy flat) | same as `Nullable<Primitive>` |
+//! | `NullableUtf8` (legacy flat) | same as `Nullable<Utf8>` |
+//! | `NullableBinary` (legacy flat) | same as `Nullable<Binary>` |
+//! | `ArrayOf` (legacy flat) | same as `List<Primitive>` |
+//! | `ArrayOfUtf8` (legacy flat) | same as `List<Utf8>` |
 //! | `Dictionary { inner }` | `Dictionary(UInt32, inner)` |
 //!
 //! # Null handling
@@ -44,15 +44,17 @@
 //! `to_arrow_array` expands the compact values to match Arrow's layout,
 //! inserting placeholder zeros (or empty strings) at null positions.
 //!
-//! `from_arrow_array` on an array with a null buffer always produces the v3
-//! `Nullable { present, value }` form (never v2 `NullablePrim` etc.). The
-//! inner `value` is **compact** — only valid rows extracted.
+//! `from_arrow_array` on an array with a null buffer always produces the
+//! recursive `Nullable { present, value }` form (never the legacy flat
+//! `NullablePrim` etc.). The inner `value` is **compact** — only valid rows
+//! extracted.
 //!
 //! # Inverse direction note
 //!
-//! `from_arrow_array` always produces **v3-shaped** `LogicalColumn` variants
-//! (`Nullable`, `List`, etc.) — never v2 variants. v2 variants are only
-//! produced by legacy Helium file readers; new conversions always use v3.
+//! `from_arrow_array` always produces **recursive-shaped** `LogicalColumn`
+//! variants (`Nullable`, `List`, etc.) — never legacy flat variants. The legacy
+//! flat variants are only produced by legacy Helium file readers; new
+//! conversions always use the recursive forms.
 
 pub mod from_arrow;
 pub mod schema;

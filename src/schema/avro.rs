@@ -390,7 +390,7 @@ fn parse_type_object(
                 Some("timestamp-millis") => {
                     // Avro timestamp-millis is UTC-implied (no timezone string).
                     // We model this as timezone: None (unspecified / UTC-implied).
-                    // See design doc: Avro local-timestamp-* also has no explicit tz.
+                    // Avro local-timestamp-* also has no explicit tz.
                     Ok(LogicalType::Datetime {
                         unit: TimeUnit::Millis,
                         timezone: None,
@@ -521,7 +521,7 @@ fn parse_record_type(
 
 /// Parse an Avro `enum` → [`LogicalType::Dictionary`]`{ inner: Utf8 }`.
 ///
-/// The enum's `symbols` array defines the dictionary entries. The v3
+/// The enum's `symbols` array defines the dictionary entries. The recursive
 /// `Dictionary { inner: Utf8 }` variant is emitted by all new writers.
 fn parse_enum_type(
     obj: &serde_json::Map<String, serde_json::Value>,
@@ -1305,7 +1305,7 @@ fn avro_values_to_logical_column(
         }
 
         // ----------------------------------------------------------------
-        // Dictionary{inner} — v3 recursive dictionary encoding
+        // Dictionary{inner} — recursive dictionary encoding
         // ----------------------------------------------------------------
         LogicalType::Dictionary { inner } => {
             // Read all logical values into the inner type, then
@@ -1354,7 +1354,7 @@ fn avro_values_to_logical_column(
         }
 
         // ----------------------------------------------------------------
-        // Legacy v2 nullable variants
+        // Legacy flat nullable variants
         // ----------------------------------------------------------------
         LogicalType::NullablePrim { data_type } => {
             let mut present = Vec::with_capacity(values.len());

@@ -59,7 +59,7 @@ pub fn default_encodings(lt: &LogicalType) -> Vec<Vec<CoderSpec>> {
         // Struct: empty top-level; leaf encodings live in FieldSpec children.
         LogicalType::Struct { .. } => vec![],
 
-        // v2 compatibility types — not produced by the format adapters but
+        // legacy flat compatibility types — not produced by the format adapters but
         // handled gracefully so this function is safe to call on any LogicalType.
         LogicalType::ArrayOf { data_type } => {
             vec![offset_coders(), prim_coders(*data_type)]

@@ -25,7 +25,7 @@ use helium::{CoderRegistry, HeliumReader, LogicalColumn, LogicalType, MinMaxValu
 /// Reads `path` and prints either a markdown table (default) or JSON to stdout.
 /// When `no_values` is `true`, min/max computation is skipped and only byte
 /// sizes are reported.  When `catalog_dir` is `Some`, uses
-/// [`HeliumReader::new_with_resolver`] so v4/v6 catalog-mode files are
+/// [`HeliumReader::new_with_resolver`] so catalog-mode files are
 /// readable.
 pub fn run(
     path: &Path,
@@ -537,7 +537,7 @@ fn stats_from_logical_column(col: &LogicalColumn) -> (StatValue, StatValue, u64)
                 non_null_count,
             )
         }
-        // v3 Nullable wrapper (new-style).
+        // recursive Nullable wrapper (new-style).
         LogicalColumn::Nullable { present, value } => {
             let non_null_count = present.iter().filter(|&&b| b).count() as u64;
             if non_null_count == 0 {

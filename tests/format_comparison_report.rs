@@ -12,10 +12,10 @@
 //! - parquet (Snappy, default)
 //! - parquet (zstd level 3)
 //! - avro (deflate) — using apache-avro 0.21, Apache-2.0 licensed
-//! - helium-v5 default schema
-//! - helium-v5 optimized schema
-//! - helium-v6 (catalog) default schema
-//! - helium-v6 (catalog) optimized schema
+//! - helium self-contained default schema
+//! - helium self-contained optimized schema
+//! - helium catalog-mode default schema
+//! - helium catalog-mode optimized schema
 //!
 //! **Dataset**
 //! - If `HELIUM_PARQUET_PATH` is set, the first 10 000 rows are read from that
@@ -1068,7 +1068,7 @@ fn helium_lt_to_pq_field(
                     .with_repetition(Repetition::OPTIONAL)
                     .with_converted_type(conv)
                     .build()
-                    .expect("pq nullable prim v2"),
+                    .expect("pq nullable prim (legacy flat)"),
             )
         }
         LogicalType::NullableUtf8 => Arc::new(
@@ -1076,13 +1076,13 @@ fn helium_lt_to_pq_field(
                 .with_repetition(Repetition::OPTIONAL)
                 .with_converted_type(ConvertedType::UTF8)
                 .build()
-                .expect("pq nullable utf8 v2"),
+                .expect("pq nullable utf8 (legacy flat)"),
         ),
         LogicalType::NullableBinary => Arc::new(
             parquet::schema::types::Type::primitive_type_builder(name, PqPhysical::BYTE_ARRAY)
                 .with_repetition(Repetition::OPTIONAL)
                 .build()
-                .expect("pq nullable binary v2"),
+                .expect("pq nullable binary (legacy flat)"),
         ),
         _ => {
             // Flat schema should not have nested types
@@ -1142,7 +1142,7 @@ fn write_pq_col(
                 .expect("binary write");
         }
 
-        // ---- v3 Nullable (the form produced by load_from_parquet for ClickBench) ----
+        // ---- recursive Nullable (the form produced by load_from_parquet for ClickBench) ----
         // The inner LogicalColumn holds only the non-null rows; we must expand to
         // all rows, injecting a placeholder for nulls.
         (LogicalType::Nullable { inner }, LogicalColumn::Nullable { present, value }) => {
@@ -1156,46 +1156,46 @@ fn write_pq_col(
                         expand_compact_ba(present, strings, |s| ByteArray::from(s.as_bytes()));
                     cw.typed::<ByteArrayType>()
                         .write_batch(&expanded, Some(&def), None)
-                        .expect("nullable utf8 v3 write");
+                        .expect("nullable utf8 (recursive) write");
                 }
                 (LogicalType::Binary, LogicalColumn::Binary(blobs)) => {
                     let expanded =
                         expand_compact_ba(present, blobs, |b| ByteArray::from(b.as_slice()));
                     cw.typed::<ByteArrayType>()
                         .write_batch(&expanded, Some(&def), None)
-                        .expect("nullable binary v3 write");
+                        .expect("nullable binary (recursive) write");
                 }
                 (inner_lt, inner_lc) => {
                     panic!(
-                        "write_pq_col: unhandled v3 Nullable inner: lt={inner_lt:?} lc={}",
+                        "write_pq_col: unhandled recursive Nullable inner: lt={inner_lt:?} lc={}",
                         lc_variant_name(inner_lc)
                     );
                 }
             }
         }
 
-        // ---- v2 NullablePrim ----
+        // ---- legacy flat NullablePrim ----
         (LogicalType::NullablePrim { .. }, LogicalColumn::NullablePrim { present, values }) => {
             let def: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
             write_pq_cd(cw, values, Some(&def));
         }
 
-        // ---- v2 NullableUtf8 ----
+        // ---- legacy flat NullableUtf8 ----
         (LogicalType::NullableUtf8, LogicalColumn::NullableUtf8 { present, strings }) => {
             let def: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
             let expanded = expand_nullable_ba(present, strings, |s| ByteArray::from(s.as_bytes()));
             cw.typed::<ByteArrayType>()
                 .write_batch(&expanded, Some(&def), None)
-                .expect("nullable utf8 v2 write");
+                .expect("nullable utf8 (legacy flat) write");
         }
 
-        // ---- v2 NullableBinary ----
+        // ---- legacy flat NullableBinary ----
         (LogicalType::NullableBinary, LogicalColumn::NullableBinary { present, blobs }) => {
             let def: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
             let expanded = expand_nullable_ba(present, blobs, |b| ByteArray::from(b.as_slice()));
             cw.typed::<ByteArrayType>()
                 .write_batch(&expanded, Some(&def), None)
-                .expect("nullable binary v2 write");
+                .expect("nullable binary (legacy flat) write");
         }
 
         (lt, lc) => {
@@ -1536,7 +1536,7 @@ fn lc_row_to_avro_value(
         (LogicalType::Binary, LogicalColumn::Binary(v)) => {
             AvroVal::Bytes(v.get(row).cloned().unwrap_or_default())
         }
-        // v3 Nullable — inner lc holds only non-null rows (compact)
+        // recursive Nullable — inner lc holds only non-null rows (compact)
         (LogicalType::Nullable { inner }, LogicalColumn::Nullable { present, value }) => {
             if !present.get(row).copied().unwrap_or(false) {
                 return AvroVal::Union(0, Box::new(AvroVal::Null));
@@ -1560,7 +1560,7 @@ fn lc_row_to_avro_value(
                 _ => AvroVal::Null,
             }
         }
-        // v2 NullablePrim (legacy synthetic data path)
+        // legacy flat NullablePrim (legacy synthetic data path)
         (LogicalType::Nullable { inner }, LogicalColumn::NullablePrim { present, values }) => {
             if !present.get(row).copied().unwrap_or(false) {
                 return AvroVal::Union(0, Box::new(AvroVal::Null));
@@ -1654,28 +1654,28 @@ fn build_optimized_schema(dataset: &FlatDataset) -> Schema {
     Optimizer::new().optimize(triples).expect("optimizer")
 }
 
-fn write_helium_v5(schema: Schema, dataset: &FlatDataset, label: &str) -> HeliumMeasure {
+fn write_helium(schema: Schema, dataset: &FlatDataset, label: &str) -> HeliumMeasure {
     let registry = CoderRegistry::default();
-    let tmp = tempfile::NamedTempFile::new().expect("tempfile v5");
+    let tmp = tempfile::NamedTempFile::new().expect("tempfile self-contained");
 
     let col_names: Vec<String> = schema.columns.iter().map(|s| s.name.clone()).collect();
     let mut writer = HeliumWriter::new(
-        tmp.as_file().try_clone().expect("clone file v5"),
+        tmp.as_file().try_clone().expect("clone file self-contained"),
         schema,
         &registry,
     )
     .expect("HeliumWriter::new");
     for name in &col_names {
         let lc = dataset.columns[name].clone();
-        writer.write_column(name, lc).expect("write_column v5");
+        writer.write_column(name, lc).expect("write_column self-contained");
     }
-    writer.finish().expect("finish v5");
+    writer.finish().expect("finish self-contained");
 
     // Round-trip verification
     {
-        let f = std::fs::File::open(tmp.path()).expect("open he v5");
+        let f = std::fs::File::open(tmp.path()).expect("open he self-contained");
         let registry2 = CoderRegistry::default();
-        let mut reader = HeliumReader::new(f, &registry2).expect("HeliumReader v5");
+        let mut reader = HeliumReader::new(f, &registry2).expect("HeliumReader self-contained");
         let schema_clone = reader
             .schema()
             .columns
@@ -1683,7 +1683,7 @@ fn write_helium_v5(schema: Schema, dataset: &FlatDataset, label: &str) -> Helium
             .map(|s| s.name.clone())
             .collect::<Vec<_>>();
         for name in &schema_clone {
-            let decoded = reader.read_column(name).expect("read_column v5");
+            let decoded = reader.read_column(name).expect("read_column self-contained");
             let original = &dataset.columns[name];
             assert_eq!(
                 &decoded, original,
@@ -1692,35 +1692,35 @@ fn write_helium_v5(schema: Schema, dataset: &FlatDataset, label: &str) -> Helium
         }
     }
 
-    let file_bytes = tmp.path().metadata().expect("metadata v5").len() as usize;
+    let file_bytes = tmp.path().metadata().expect("metadata self-contained").len() as usize;
     HeliumMeasure {
         file_bytes,
         catalog_side_bytes: None,
     }
 }
 
-/// Write v5 in multiple stripes of `stripe_rows` rows each.
+/// Write a self-contained file in multiple stripes of `stripe_rows` rows each.
 ///
 /// Uses `LogicalColumn::slice` to chop each column into chunks, calling
 /// `HeliumWriter::finish_stripe` between chunks (same pattern as
 /// `src/cli/convert.rs::write_multistripe`).  Round-trip is verified by
 /// reading each stripe back with `read_column_at_stripe` and concatenating.
-fn write_helium_v5_multistripe(
+fn write_helium_multistripe(
     schema: Schema,
     dataset: &FlatDataset,
     stripe_rows: usize,
     label: &str,
 ) -> HeliumMeasure {
     let registry = CoderRegistry::default();
-    let tmp = tempfile::NamedTempFile::new().expect("tempfile v5 multi");
+    let tmp = tempfile::NamedTempFile::new().expect("tempfile self-contained multi");
 
     let col_names: Vec<String> = schema.columns.iter().map(|s| s.name.clone()).collect();
     let mut writer = HeliumWriter::new(
-        tmp.as_file().try_clone().expect("clone file v5 multi"),
+        tmp.as_file().try_clone().expect("clone file self-contained multi"),
         schema,
         &registry,
     )
-    .expect("HeliumWriter::new v5 multi");
+    .expect("HeliumWriter::new self-contained multi");
 
     let total = dataset.row_count;
     let mut offset = 0usize;
@@ -1732,20 +1732,20 @@ fn write_helium_v5_multistripe(
                 .unwrap_or_else(|e| panic!("slice column '{name}' at {offset}+{chunk}: {e}"));
             writer
                 .write_column(name, lc)
-                .expect("write_column v5 multi");
+                .expect("write_column self-contained multi");
         }
         offset += chunk;
         if offset < total {
-            writer.finish_stripe().expect("finish_stripe v5 multi");
+            writer.finish_stripe().expect("finish_stripe self-contained multi");
         }
     }
-    writer.finish().expect("finish v5 multi");
+    writer.finish().expect("finish self-contained multi");
 
     // Round-trip verification: read each stripe back and concatenate, then compare.
     {
-        let f = std::fs::File::open(tmp.path()).expect("open he v5 multi");
+        let f = std::fs::File::open(tmp.path()).expect("open he self-contained multi");
         let registry2 = CoderRegistry::default();
-        let mut reader = HeliumReader::new(f, &registry2).expect("HeliumReader v5 multi");
+        let mut reader = HeliumReader::new(f, &registry2).expect("HeliumReader self-contained multi");
         let n_stripes = reader.stripe_count();
         let schema_cols = reader
             .schema()
@@ -1759,11 +1759,11 @@ fn write_helium_v5_multistripe(
             for s_idx in 0..n_stripes {
                 let stripe_col = reader
                     .read_column_at_stripe(name, s_idx)
-                    .expect("read_column_at_stripe v5 multi");
+                    .expect("read_column_at_stripe self-contained multi");
                 let stripe_len = stripe_col.row_count();
                 let expected = dataset.columns[name]
                     .slice(global_offset, stripe_len)
-                    .expect("slice expected v5 multi");
+                    .expect("slice expected self-contained multi");
                 assert_eq!(
                     stripe_col, expected,
                     "round-trip mismatch stripe {s_idx} col '{name}' in {label}"
@@ -1777,14 +1777,14 @@ fn write_helium_v5_multistripe(
         }
     }
 
-    let file_bytes = tmp.path().metadata().expect("metadata v5 multi").len() as usize;
+    let file_bytes = tmp.path().metadata().expect("metadata self-contained multi").len() as usize;
     HeliumMeasure {
         file_bytes,
         catalog_side_bytes: None,
     }
 }
 
-fn write_helium_v6(schema: Schema, dataset: &FlatDataset, label: &str) -> HeliumMeasure {
+fn write_helium_catalog(schema: Schema, dataset: &FlatDataset, label: &str) -> HeliumMeasure {
     let registry = CoderRegistry::default();
     let catalog_dir = tempfile::tempdir().expect("catalog dir");
     let catalog = Catalog::open(catalog_dir.path()).expect("Catalog::open");
@@ -1797,27 +1797,27 @@ fn write_helium_v6(schema: Schema, dataset: &FlatDataset, label: &str) -> Helium
         .expect("catalog file metadata")
         .len() as usize;
 
-    let tmp = tempfile::NamedTempFile::new().expect("tempfile v6");
+    let tmp = tempfile::NamedTempFile::new().expect("tempfile catalog");
     let mut writer = catalog
         .open_writer(
-            tmp.as_file().try_clone().expect("clone file v6"),
+            tmp.as_file().try_clone().expect("clone file catalog"),
             schema,
             &registry,
         )
         .expect("Catalog::open_writer");
     for name in &col_names {
         let lc = dataset.columns[name].clone();
-        writer.write_column(name, lc).expect("write_column v6");
+        writer.write_column(name, lc).expect("write_column catalog");
     }
-    writer.finish().expect("finish v6");
+    writer.finish().expect("finish catalog");
 
     // Round-trip verification with resolver
     {
-        let f = std::fs::File::open(tmp.path()).expect("open he v6");
+        let f = std::fs::File::open(tmp.path()).expect("open he catalog");
         let registry2 = CoderRegistry::default();
         let resolver = catalog.resolver();
         let mut reader =
-            HeliumReader::new_with_resolver(f, &registry2, resolver).expect("HeliumReader v6");
+            HeliumReader::new_with_resolver(f, &registry2, resolver).expect("HeliumReader catalog");
         let schema_clone = reader
             .schema()
             .columns
@@ -1825,7 +1825,7 @@ fn write_helium_v6(schema: Schema, dataset: &FlatDataset, label: &str) -> Helium
             .map(|s| s.name.clone())
             .collect::<Vec<_>>();
         for name in &schema_clone {
-            let decoded = reader.read_column(name).expect("read_column v6");
+            let decoded = reader.read_column(name).expect("read_column catalog");
             let original = &dataset.columns[name];
             assert_eq!(
                 &decoded, original,
@@ -1834,43 +1834,43 @@ fn write_helium_v6(schema: Schema, dataset: &FlatDataset, label: &str) -> Helium
         }
     }
 
-    let file_bytes = tmp.path().metadata().expect("metadata v6").len() as usize;
+    let file_bytes = tmp.path().metadata().expect("metadata catalog").len() as usize;
     HeliumMeasure {
         file_bytes,
         catalog_side_bytes: Some(catalog_side_bytes),
     }
 }
 
-/// Write v6 (catalog) in multiple stripes of `stripe_rows` rows each.
+/// Write a catalog-mode file in multiple stripes of `stripe_rows` rows each.
 ///
 /// The catalog side-file is written once (schema is shared across all stripes);
 /// only the `.he` file grows with each stripe's footer entries.
-fn write_helium_v6_multistripe(
+fn write_helium_catalog_multistripe(
     schema: Schema,
     dataset: &FlatDataset,
     stripe_rows: usize,
     label: &str,
 ) -> HeliumMeasure {
     let registry = CoderRegistry::default();
-    let catalog_dir = tempfile::tempdir().expect("catalog dir v6 multi");
-    let catalog = Catalog::open(catalog_dir.path()).expect("Catalog::open v6 multi");
+    let catalog_dir = tempfile::tempdir().expect("catalog dir catalog multi");
+    let catalog = Catalog::open(catalog_dir.path()).expect("Catalog::open catalog multi");
 
     let col_names: Vec<String> = schema.columns.iter().map(|s| s.name.clone()).collect();
-    let hash = catalog.add_schema(&schema).expect("add_schema v6 multi");
+    let hash = catalog.add_schema(&schema).expect("add_schema catalog multi");
     let catalog_side_bytes = catalog
         .path_for(&hash)
         .metadata()
-        .expect("catalog file metadata v6 multi")
+        .expect("catalog file metadata catalog multi")
         .len() as usize;
 
-    let tmp = tempfile::NamedTempFile::new().expect("tempfile v6 multi");
+    let tmp = tempfile::NamedTempFile::new().expect("tempfile catalog multi");
     let mut writer = catalog
         .open_writer(
-            tmp.as_file().try_clone().expect("clone file v6 multi"),
+            tmp.as_file().try_clone().expect("clone file catalog multi"),
             schema,
             &registry,
         )
-        .expect("Catalog::open_writer v6 multi");
+        .expect("Catalog::open_writer catalog multi");
 
     let total = dataset.row_count;
     let mut offset = 0usize;
@@ -1882,22 +1882,22 @@ fn write_helium_v6_multistripe(
                 .unwrap_or_else(|e| panic!("slice column '{name}' at {offset}+{chunk}: {e}"));
             writer
                 .write_column(name, lc)
-                .expect("write_column v6 multi");
+                .expect("write_column catalog multi");
         }
         offset += chunk;
         if offset < total {
-            writer.finish_stripe().expect("finish_stripe v6 multi");
+            writer.finish_stripe().expect("finish_stripe catalog multi");
         }
     }
-    writer.finish().expect("finish v6 multi");
+    writer.finish().expect("finish catalog multi");
 
     // Round-trip verification: read each stripe back and compare vs original slice.
     {
-        let f = std::fs::File::open(tmp.path()).expect("open he v6 multi");
+        let f = std::fs::File::open(tmp.path()).expect("open he catalog multi");
         let registry2 = CoderRegistry::default();
         let resolver = catalog.resolver();
         let mut reader = HeliumReader::new_with_resolver(f, &registry2, resolver)
-            .expect("HeliumReader v6 multi");
+            .expect("HeliumReader catalog multi");
         let n_stripes = reader.stripe_count();
         let schema_cols = reader
             .schema()
@@ -1910,11 +1910,11 @@ fn write_helium_v6_multistripe(
             for s_idx in 0..n_stripes {
                 let stripe_col = reader
                     .read_column_at_stripe(name, s_idx)
-                    .expect("read_column_at_stripe v6 multi");
+                    .expect("read_column_at_stripe catalog multi");
                 let stripe_len = stripe_col.row_count();
                 let expected = dataset.columns[name]
                     .slice(global_offset, stripe_len)
-                    .expect("slice expected v6 multi");
+                    .expect("slice expected catalog multi");
                 assert_eq!(
                     stripe_col, expected,
                     "round-trip mismatch stripe {s_idx} col '{name}' in {label}"
@@ -1928,7 +1928,7 @@ fn write_helium_v6_multistripe(
         }
     }
 
-    let file_bytes = tmp.path().metadata().expect("metadata v6 multi").len() as usize;
+    let file_bytes = tmp.path().metadata().expect("metadata catalog multi").len() as usize;
     HeliumMeasure {
         file_bytes,
         catalog_side_bytes: Some(catalog_side_bytes),
@@ -2045,76 +2045,76 @@ fn format_comparison_report() {
     let default_schema_lz4 = lz4_terminal_schema(&default_schema);
     let optimized_schema_lz4 = lz4_terminal_schema(&optimized_schema);
 
-    eprintln!("  Writing helium-v5 default...");
-    let he_v5_default = write_helium_v5(default_schema.clone(), &dataset, "helium-v5 default");
+    eprintln!("  Writing helium default...");
+    let he_sc_default = write_helium(default_schema.clone(), &dataset, "helium default");
 
-    eprintln!("  Writing helium-v5 optimized...");
-    let he_v5_opt = write_helium_v5(optimized_schema.clone(), &dataset, "helium-v5 optimized");
+    eprintln!("  Writing helium optimized...");
+    let he_sc_opt = write_helium(optimized_schema.clone(), &dataset, "helium optimized");
 
-    eprintln!("  Writing helium-v5 default (lz4 terminal)...");
-    let he_v5_default_lz4 = write_helium_v5(
+    eprintln!("  Writing helium default (lz4 terminal)...");
+    let he_sc_default_lz4 = write_helium(
         default_schema_lz4.clone(),
         &dataset,
-        "helium-v5 default (lz4 terminal)",
+        "helium default (lz4 terminal)",
     );
 
-    eprintln!("  Writing helium-v5 optimized (lz4 terminal)...");
-    let he_v5_opt_lz4 = write_helium_v5(
+    eprintln!("  Writing helium optimized (lz4 terminal)...");
+    let he_sc_opt_lz4 = write_helium(
         optimized_schema_lz4.clone(),
         &dataset,
-        "helium-v5 optimized (lz4 terminal)",
+        "helium optimized (lz4 terminal)",
     );
 
-    eprintln!("  Writing helium-v6 default...");
-    let he_v6_default = write_helium_v6(default_schema.clone(), &dataset, "helium-v6 default");
+    eprintln!("  Writing helium-catalog default...");
+    let he_cat_default = write_helium_catalog(default_schema.clone(), &dataset, "helium-catalog default");
 
-    eprintln!("  Writing helium-v6 optimized...");
-    let he_v6_opt = write_helium_v6(optimized_schema.clone(), &dataset, "helium-v6 optimized");
+    eprintln!("  Writing helium-catalog optimized...");
+    let he_cat_opt = write_helium_catalog(optimized_schema.clone(), &dataset, "helium-catalog optimized");
 
-    eprintln!("  Writing helium-v6 default (lz4 terminal)...");
-    let he_v6_default_lz4 = write_helium_v6(
+    eprintln!("  Writing helium-catalog default (lz4 terminal)...");
+    let he_cat_default_lz4 = write_helium_catalog(
         default_schema_lz4.clone(),
         &dataset,
-        "helium-v6 default (lz4 terminal)",
+        "helium-catalog default (lz4 terminal)",
     );
 
-    eprintln!("  Writing helium-v6 optimized (lz4 terminal)...");
-    let he_v6_opt_lz4 = write_helium_v6(
+    eprintln!("  Writing helium-catalog optimized (lz4 terminal)...");
+    let he_cat_opt_lz4 = write_helium_catalog(
         optimized_schema_lz4.clone(),
         &dataset,
-        "helium-v6 optimized (lz4 terminal)",
+        "helium-catalog optimized (lz4 terminal)",
     );
 
-    eprintln!("  Writing helium-v5 default ({stripe_rows}-row stripes)...");
-    let he_v5_default_ms = write_helium_v5_multistripe(
+    eprintln!("  Writing helium default ({stripe_rows}-row stripes)...");
+    let he_sc_default_ms = write_helium_multistripe(
         default_schema.clone(),
         &dataset,
         stripe_rows,
-        "helium-v5 default (multi-stripe)",
+        "helium default (multi-stripe)",
     );
 
-    eprintln!("  Writing helium-v5 optimized ({stripe_rows}-row stripes)...");
-    let he_v5_opt_ms = write_helium_v5_multistripe(
+    eprintln!("  Writing helium optimized ({stripe_rows}-row stripes)...");
+    let he_sc_opt_ms = write_helium_multistripe(
         optimized_schema.clone(),
         &dataset,
         stripe_rows,
-        "helium-v5 optimized (multi-stripe)",
+        "helium optimized (multi-stripe)",
     );
 
-    eprintln!("  Writing helium-v6 default ({stripe_rows}-row stripes)...");
-    let he_v6_default_ms = write_helium_v6_multistripe(
+    eprintln!("  Writing helium-catalog default ({stripe_rows}-row stripes)...");
+    let he_cat_default_ms = write_helium_catalog_multistripe(
         default_schema,
         &dataset,
         stripe_rows,
-        "helium-v6 default (multi-stripe)",
+        "helium-catalog default (multi-stripe)",
     );
 
-    eprintln!("  Writing helium-v6 optimized ({stripe_rows}-row stripes)...");
-    let he_v6_opt_ms = write_helium_v6_multistripe(
+    eprintln!("  Writing helium-catalog optimized ({stripe_rows}-row stripes)...");
+    let he_cat_opt_ms = write_helium_catalog_multistripe(
         optimized_schema,
         &dataset,
         stripe_rows,
-        "helium-v6 optimized (multi-stripe)",
+        "helium-catalog optimized (multi-stripe)",
     );
 
     // ---- Baseline sizes ----
@@ -2184,97 +2184,97 @@ fn format_comparison_report() {
     }
     external_rows.sort_by_key(|r| r.bytes);
 
-    let v6_def_he = he_v6_default.file_bytes;
-    let v6_def_cat = he_v6_default.catalog_side_bytes.unwrap_or(0);
-    let v6_opt_he = he_v6_opt.file_bytes;
-    let v6_opt_cat = he_v6_opt.catalog_side_bytes.unwrap_or(0);
+    let v6_def_he = he_cat_default.file_bytes;
+    let v6_def_cat = he_cat_default.catalog_side_bytes.unwrap_or(0);
+    let v6_opt_he = he_cat_opt.file_bytes;
+    let v6_opt_cat = he_cat_opt.catalog_side_bytes.unwrap_or(0);
 
     let stripe_label = format!("{stripe_rows}-row stripes");
 
-    let v6_def_lz4_he = he_v6_default_lz4.file_bytes;
-    let v6_def_lz4_cat = he_v6_default_lz4.catalog_side_bytes.unwrap_or(0);
-    let v6_opt_lz4_he = he_v6_opt_lz4.file_bytes;
-    let v6_opt_lz4_cat = he_v6_opt_lz4.catalog_side_bytes.unwrap_or(0);
+    let v6_def_lz4_he = he_cat_default_lz4.file_bytes;
+    let v6_def_lz4_cat = he_cat_default_lz4.catalog_side_bytes.unwrap_or(0);
+    let v6_opt_lz4_he = he_cat_opt_lz4.file_bytes;
+    let v6_opt_lz4_cat = he_cat_opt_lz4.catalog_side_bytes.unwrap_or(0);
 
     let mut helium_rows: Vec<ReportRow> = vec![
         ReportRow {
-            label: "helium-v5 default".into(),
-            bytes: he_v5_default.file_bytes,
+            label: "helium default".into(),
+            bytes: he_sc_default.file_bytes,
             catalog_annotation: None,
         },
         ReportRow {
-            label: "helium-v5 optimized".into(),
-            bytes: he_v5_opt.file_bytes,
+            label: "helium optimized".into(),
+            bytes: he_sc_opt.file_bytes,
             catalog_annotation: None,
         },
         ReportRow {
-            label: "helium-v5 default (lz4 terminal)".into(),
-            bytes: he_v5_default_lz4.file_bytes,
+            label: "helium default (lz4 terminal)".into(),
+            bytes: he_sc_default_lz4.file_bytes,
             catalog_annotation: None,
         },
         ReportRow {
-            label: "helium-v5 optimized (lz4 terminal)".into(),
-            bytes: he_v5_opt_lz4.file_bytes,
+            label: "helium optimized (lz4 terminal)".into(),
+            bytes: he_sc_opt_lz4.file_bytes,
             catalog_annotation: None,
         },
         ReportRow {
-            label: "helium-v6 default".into(),
+            label: "helium-catalog default".into(),
             bytes: v6_def_he,
             catalog_annotation: None,
         },
         ReportRow {
-            label: "helium-v6 default + catalog side".into(),
+            label: "helium-catalog default + catalog side".into(),
             bytes: v6_def_he + v6_def_cat,
             catalog_annotation: Some((v6_def_he, v6_def_cat)),
         },
         ReportRow {
-            label: "helium-v6 optimized".into(),
+            label: "helium-catalog optimized".into(),
             bytes: v6_opt_he,
             catalog_annotation: None,
         },
         ReportRow {
-            label: "helium-v6 optimized + catalog side".into(),
+            label: "helium-catalog optimized + catalog side".into(),
             bytes: v6_opt_he + v6_opt_cat,
             catalog_annotation: Some((v6_opt_he, v6_opt_cat)),
         },
         ReportRow {
-            label: "helium-v6 default (lz4 terminal)".into(),
+            label: "helium-catalog default (lz4 terminal)".into(),
             bytes: v6_def_lz4_he,
             catalog_annotation: None,
         },
         ReportRow {
-            label: "helium-v6 default (lz4 terminal) + catalog side".into(),
+            label: "helium-catalog default (lz4 terminal) + catalog side".into(),
             bytes: v6_def_lz4_he + v6_def_lz4_cat,
             catalog_annotation: Some((v6_def_lz4_he, v6_def_lz4_cat)),
         },
         ReportRow {
-            label: "helium-v6 optimized (lz4 terminal)".into(),
+            label: "helium-catalog optimized (lz4 terminal)".into(),
             bytes: v6_opt_lz4_he,
             catalog_annotation: None,
         },
         ReportRow {
-            label: "helium-v6 optimized (lz4 terminal) + catalog side".into(),
+            label: "helium-catalog optimized (lz4 terminal) + catalog side".into(),
             bytes: v6_opt_lz4_he + v6_opt_lz4_cat,
             catalog_annotation: Some((v6_opt_lz4_he, v6_opt_lz4_cat)),
         },
         ReportRow {
-            label: format!("helium-v5 default ({stripe_label})"),
-            bytes: he_v5_default_ms.file_bytes,
+            label: format!("helium default ({stripe_label})"),
+            bytes: he_sc_default_ms.file_bytes,
             catalog_annotation: None,
         },
         ReportRow {
-            label: format!("helium-v5 optimized ({stripe_label})"),
-            bytes: he_v5_opt_ms.file_bytes,
+            label: format!("helium optimized ({stripe_label})"),
+            bytes: he_sc_opt_ms.file_bytes,
             catalog_annotation: None,
         },
         ReportRow {
-            label: format!("helium-v6 default ({stripe_label})"),
-            bytes: he_v6_default_ms.file_bytes,
+            label: format!("helium-catalog default ({stripe_label})"),
+            bytes: he_cat_default_ms.file_bytes,
             catalog_annotation: None,
         },
         ReportRow {
-            label: format!("helium-v6 optimized ({stripe_label})"),
-            bytes: he_v6_opt_ms.file_bytes,
+            label: format!("helium-catalog optimized ({stripe_label})"),
+            bytes: he_cat_opt_ms.file_bytes,
             catalog_annotation: None,
         },
     ];
@@ -2386,9 +2386,9 @@ fn format_comparison_report() {
     }
 
     // Catalog overhead per file
-    let v5_def = he_v5_default.file_bytes;
+    let v5_def = he_sc_default.file_bytes;
     bullets.push(format!(
-        "Catalog (v6) per-file overhead vs v5: {} bytes (.he file: {} vs {}). \
+        "Catalog (catalog) per-file overhead vs self-contained: {} bytes (.he file: {} vs {}). \
          The catalog JSON side file is {} and is amortized across all files sharing the schema.",
         v6_def_he as i64 - v5_def as i64,
         fmt_bytes(v6_def_he),
@@ -2460,12 +2460,12 @@ fn format_comparison_report() {
 
     // Multi-stripe overhead bullet
     {
-        let single = he_v5_default.file_bytes;
-        let multi = he_v5_default_ms.file_bytes;
+        let single = he_sc_default.file_bytes;
+        let multi = he_sc_default_ms.file_bytes;
         let n_stripes = dataset.row_count.div_ceil(stripe_rows);
         let pct = 100.0 * (multi as f64 - single as f64) / single as f64;
         bullets.push(format!(
-            "Multi-stripe overhead: helium-v5 default went from {} → {} ({:+.1}%) when \
+            "Multi-stripe overhead: helium default went from {} → {} ({:+.1}%) when \
              split into {stripe_rows}-row stripes ({n_stripes} stripes). The trade is \
              per-stripe footer entries × {n_stripes}, repaid by query-time stripe pruning.",
             fmt_bytes(single),
@@ -2477,14 +2477,14 @@ fn format_comparison_report() {
     // ---- New isolation bullets ----
 
     // 1. What does helium's columnar shaping buy?
-    // Compare pure-zstd (no schema) vs helium-v5 default (default pipelines + zstd terminal).
+    // Compare pure-zstd (no schema) vs helium self-contained default (default pipelines + zstd terminal).
     {
         let pure = pure_zstd_bytes.len();
-        let shaped = he_v5_default.file_bytes;
+        let shaped = he_sc_default.file_bytes;
         if shaped < pure {
             let pct = 100.0 * (pure - shaped) as f64 / pure as f64;
             bullets.push(format!(
-                "**Helium columnar shaping contribution**: helium-v5 default ({}) is {:.1}% \
+                "**Helium columnar shaping contribution**: helium default ({}) is {:.1}% \
                  smaller than pure-zstd on raw bytes ({}). That fraction of compression \
                  comes from Helium's pipelines (delta / gorilla / leb128 / dict), not from \
                  zstd itself.",
@@ -2495,7 +2495,7 @@ fn format_comparison_report() {
         } else {
             let pct = 100.0 * (shaped - pure) as f64 / pure as f64;
             bullets.push(format!(
-                "**Helium columnar shaping contribution**: helium-v5 default ({}) is {:.1}% \
+                "**Helium columnar shaping contribution**: helium default ({}) is {:.1}% \
                  *larger* than pure-zstd on raw bytes ({}). The per-column framing overhead \
                  of Helium exceeds what the pipelines save on this dataset — zstd alone on \
                  raw bytes beats the default pipeline configuration.",
@@ -2507,13 +2507,13 @@ fn format_comparison_report() {
     }
 
     // 2. What does the terminal compressor choice matter?
-    // Compare helium-v5 default (zstd) vs helium-v5 default (lz4 terminal).
+    // Compare helium self-contained default (zstd) vs helium self-contained default (lz4 terminal).
     {
-        let zstd_sz = he_v5_default.file_bytes;
-        let lz4_sz = he_v5_default_lz4.file_bytes;
+        let zstd_sz = he_sc_default.file_bytes;
+        let lz4_sz = he_sc_default_lz4.file_bytes;
         let pct = 100.0 * (lz4_sz as f64 - zstd_sz as f64) / zstd_sz as f64;
         bullets.push(format!(
-            "**Terminal compressor choice**: helium-v5 default with zstd ({}) vs lz4 ({}) — \
+            "**Terminal compressor choice**: helium default with zstd ({}) vs lz4 ({}) — \
              lz4 terminal is {:.1}% {} in file size. After delta/gorilla/leb128 shaping, \
              zstd vs lz4 difference {}.",
             fmt_bytes(zstd_sz),
@@ -2570,16 +2570,16 @@ fn format_comparison_report() {
     }
 
     // 4. Is the file-format framing free?
-    // Compare pure-zstd (no framing) vs helium-v5 default (zstd terminal; minimal shaping).
+    // Compare pure-zstd (no framing) vs helium self-contained default (zstd terminal; minimal shaping).
     {
         let pure = pure_zstd_bytes.len();
-        let framed = he_v5_default.file_bytes;
+        let framed = he_sc_default.file_bytes;
         let diff = framed as i64 - pure as i64;
         let pct = 100.0 * diff as f64 / pure as f64;
         if diff > 0 {
             bullets.push(format!(
                 "**File-format framing overhead**: pure-zstd on raw bytes ({}) vs \
-                 helium-v5 default ({}) — the per-column/per-stripe framing costs {:+} bytes \
+                 helium default ({}) — the per-column/per-stripe framing costs {:+} bytes \
                  ({:+.1}%). This is the net difference between what zstd achieves on a flat \
                  byte stream vs what Helium's pipeline structure adds or removes.",
                 fmt_bytes(pure),
@@ -2590,7 +2590,7 @@ fn format_comparison_report() {
         } else {
             bullets.push(format!(
                 "**File-format framing overhead**: pure-zstd on raw bytes ({}) vs \
-                 helium-v5 default ({}) — Helium's columnar shaping more than pays for its \
+                 helium default ({}) — Helium's columnar shaping more than pays for its \
                  framing: net saving {:+} bytes ({:+.1}%).",
                 fmt_bytes(pure),
                 fmt_bytes(framed),

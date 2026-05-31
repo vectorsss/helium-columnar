@@ -3,7 +3,7 @@
 //! These modules were previously the top-level `helium-core` library.
 //! All public items are re-exported at the crate root for convenience.
 
-/// Schema canonicalization and BLAKE3 hashing for v4/v6 catalog mode.
+/// Schema canonicalization and BLAKE3 hashing for catalog mode.
 pub mod canonicalize;
 /// Core coder traits ([`Coder`], [`NonBlockCoder`], [`BlockCoder`]) and
 /// the physical [`DataType`] / [`ColumnData`] enums.

@@ -74,8 +74,8 @@ pub struct HeliumExec {
     /// provided).  `Some(indices)` lists stripe indices to actually read;
     /// any partition not in this set returns an empty batch immediately.
     pub(crate) keep_stripes: Option<Vec<usize>>,
-    /// Pre-loaded Helium schema.  Passed as an in-memory resolver so that v6
-    /// (catalog-mode) files can be opened without a catalog directory at
+    /// Pre-loaded Helium schema.  Passed as an in-memory resolver so that
+    /// catalog-mode files can be opened without a catalog directory at
     /// read time — the schema was already resolved at `HeliumTableProvider`
     /// construction time.
     pub(crate) helium_schema: Arc<HeliumSchema>,
@@ -98,7 +98,7 @@ impl HeliumExec {
     /// `keep_stripes` is the set of stripe indices that survived predicate
     /// pruning; `None` means keep all stripes.
     /// `helium_schema` is the pre-loaded Helium schema; used as an in-memory
-    /// resolver so v6 files can be read without a catalog directory.
+    /// resolver so catalog-mode files can be read without a catalog directory.
     /// `helium_statistics` is the file-wide statistics pre-computed by
     /// `HeliumTableProvider`; projected as needed.
     // Each argument is a distinct piece of state needed by the plan node;
@@ -302,7 +302,7 @@ impl ExecutionPlan for HeliumExec {
 /// row limit, and return an Arrow `RecordBatch`.
 ///
 /// `helium_schema` is pre-loaded from the `HeliumTableProvider`; it is used
-/// as an in-memory resolver so v6 (catalog-mode) files can be read without
+/// as an in-memory resolver so catalog-mode files can be read without
 /// a catalog directory on disk.
 ///
 /// When `projection` is `Some([])` (zero columns requested by DataFusion for
@@ -346,7 +346,7 @@ fn read_stripe_batch(
     })?;
     let registry = CoderRegistry::default();
     // Use an in-memory resolver that returns the pre-loaded schema.
-    // This makes v6 (catalog-mode) files work without a catalog directory
+    // This makes catalog-mode files work without a catalog directory
     // on the reader side — the schema was already resolved at
     // `HeliumTableProvider` construction time.
     let schema_clone = helium_schema.clone();

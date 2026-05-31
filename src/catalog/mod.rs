@@ -1,6 +1,6 @@
 //! Opt-in shared-schema catalog for Helium `.he` files.
 //!
-//! Implements PLAN_V2 §6.5: a directory of schema-hash-keyed JSON files plus a
+//! A directory of schema-hash-keyed JSON files plus a
 //! filesystem-backed resolver suitable for [`crate::HeliumReader::new_with_resolver`].
 //!
 //! # Why catalog mode
@@ -8,8 +8,8 @@
 //! For workloads that produce many `.he` files all sharing the same logical
 //! schema (canonical example: the Avro-replacement 5G MR pipeline writing one
 //! file per partition × per day), embedding the schema JSON in every file's
-//! header is wasted bytes. v3 already compresses the schema (PLAN_V2 §6.4),
-//! but a 32-byte hash reference is still ~10–100× smaller than even a
+//! header is wasted bytes. The self-contained format already compresses the
+//! schema, but a 32-byte hash reference is still ~10–100× smaller than even a
 //! compressed schema for many real shapes.
 //!
 //! Catalog mode is **opt-in**: the default [`HeliumWriter::new`] continues to
@@ -41,11 +41,10 @@ use std::path::{Path, PathBuf};
 
 use crate::{HeliumError, HeliumWriter, Result, Schema};
 
-// Re-export from helium-core: the canonicalizer and schema_hash live there
-// so `HeliumWriter::with_catalog_ref` can assert hash correctness without
-// pulling helium-catalog into the helium-core dep graph (PLAN_V2 §6.5 Surface
-// C lock). helium-catalog re-exports them so users only need this one crate
-// for catalog admin work.
+// The canonicalizer and schema_hash live in the core module so
+// `HeliumWriter::with_catalog_ref` can assert hash correctness without
+// pulling extra dependencies into the format-only surface. They are
+// re-exported here so users only need the catalog module for catalog admin work.
 pub use crate::{canonicalize_json, schema_hash};
 
 // ---------------------------------------------------------------------------
@@ -119,8 +118,7 @@ impl Catalog {
     }
 
     /// Look up a registered schema by hash. Surfaces missing-file as
-    /// `HeliumError::Format("schema hash <hex> not found by resolver")`
-    /// per §6.5 Surface E.
+    /// `HeliumError::Format("schema hash <hex> not found by resolver")`.
     pub fn lookup_by_hash(&self, hash: &blake3::Hash) -> Result<Schema> {
         let path = self.path_for(hash);
         let bytes = fs::read(&path).map_err(|_e| {
@@ -216,7 +214,7 @@ impl Catalog {
     }
 
     /// Convenience: add `schema` (if not already present) and open a
-    /// `HeliumWriter` that emits a v4 hash-reference header pointing at the
+    /// `HeliumWriter` that emits a catalog-mode (external-schema) header pointing at the
     /// freshly registered schema.
     ///
     /// Equivalent to:

@@ -72,7 +72,7 @@ pub(crate) fn write_flat_column_window(
             }
         }
 
-        // v2 nullable primitives (present bitmap covers all rows, values dense)
+        // legacy flat nullable primitives (present bitmap covers all rows, values dense)
         LogicalColumn::NullablePrim { present, values } => {
             write_flat_data_nullable(vec, values, present, row_start, chunk_size);
         }
@@ -127,7 +127,7 @@ pub(crate) fn write_flat_column_window(
             }
         },
 
-        // v3 nullable — compacted inner values
+        // recursive nullable — compacted inner values
         LogicalColumn::Nullable { present, value } => {
             write_nullable_compacted(vec, present, value, row_start, chunk_size)?;
         }
@@ -195,7 +195,7 @@ pub(crate) fn write_flat_column_window(
         }
 
         LogicalColumn::ArrayOf { .. } | LogicalColumn::ArrayOfUtf8 { .. } => {
-            return Err("read_he: ArrayOf (v2 legacy) not supported".into());
+            return Err("read_he: ArrayOf (legacy flat) not supported".into());
         }
 
         LogicalColumn::Struct { .. } | LogicalColumn::List { .. } | LogicalColumn::Map { .. } => {
@@ -245,7 +245,7 @@ fn write_flat_data(vec: &mut FlatVector, data: &ColumnData, row_start: usize, ch
     }
 }
 
-/// Write a nullable `ColumnData` (v2 `NullablePrim` semantics — dense storage,
+/// Write a nullable `ColumnData` (legacy flat `NullablePrim` semantics — dense storage,
 /// null bitmap separate) into the output vector.
 fn write_flat_data_nullable(
     vec: &mut FlatVector,
@@ -324,7 +324,7 @@ fn expand_dict_prim(
     }
 }
 
-/// Write a v3 `Nullable { present, value }` (compacted inner) column window.
+/// Write a recursive `Nullable { present, value }` (compacted inner) column window.
 ///
 /// The inner `value` holds only the non-null rows in compacted form. We count
 /// how many non-null rows precede `row_start` to find the offset into the

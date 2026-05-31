@@ -1,4 +1,4 @@
-//! Recursive v3 nested-type optimizer.
+//! Recursive nested-type optimizer.
 //!
 //! The core function [`optimize_type`] walks any `LogicalType`/`LogicalColumn`
 //! pair and returns:
@@ -96,7 +96,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // v2 NullablePrim
+        // legacy flat NullablePrim
         // ----------------------------------------------------------------
         (
             LogicalType::NullablePrim { data_type },
@@ -118,7 +118,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // v2 NullableUtf8
+        // legacy flat NullableUtf8
         // ----------------------------------------------------------------
         (LogicalType::NullableUtf8, LogicalColumn::NullableUtf8 { present, strings }) => {
             let present_bytes = present_to_bytes(&present);
@@ -151,7 +151,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // v2 NullableBinary
+        // legacy flat NullableBinary
         // ----------------------------------------------------------------
         (LogicalType::NullableBinary, LogicalColumn::NullableBinary { present, blobs }) => {
             let present_bytes = present_to_bytes(&present);
@@ -187,7 +187,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // v2 ArrayOf
+        // legacy flat ArrayOf
         // ----------------------------------------------------------------
         (LogicalType::ArrayOf { data_type }, LogicalColumn::ArrayOf { offsets, values }) => {
             let off_enc = pick_best_leaf(
@@ -202,7 +202,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // v2 ArrayOfUtf8
+        // legacy flat ArrayOfUtf8
         // ----------------------------------------------------------------
         (LogicalType::ArrayOfUtf8, LogicalColumn::ArrayOfUtf8 { offsets, strings }) => {
             let (inner_off, data_bytes) =
@@ -238,7 +238,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // v3 Struct — encodings live in FieldSpec, not in ColumnSpec::encodings
+        // recursive Struct — encodings live in FieldSpec, not in ColumnSpec::encodings
         // ----------------------------------------------------------------
         (
             LogicalType::Struct {
@@ -276,7 +276,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // v3 List
+        // recursive List
         // ----------------------------------------------------------------
         (LogicalType::List { inner }, LogicalColumn::List { offsets, values }) => {
             let off_enc = pick_best_leaf(
@@ -300,7 +300,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // v3 Map
+        // recursive Map
         // ----------------------------------------------------------------
         (
             LogicalType::Map { key, value },
@@ -335,7 +335,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // v3 Nullable
+        // recursive Nullable
         // ----------------------------------------------------------------
         (LogicalType::Nullable { inner }, LogicalColumn::Nullable { present, value }) => {
             let present_bytes = present_to_bytes(&present);
@@ -360,7 +360,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // v3 Union
+        // recursive Union
         // ----------------------------------------------------------------
         (
             LogicalType::Union {
@@ -489,7 +489,7 @@ pub fn optimize_type(
         }
 
         // ----------------------------------------------------------------
-        // Dictionary{inner} — v3 recursive dictionary encoding
+        // Dictionary{inner} — recursive dictionary encoding
         // ----------------------------------------------------------------
         (
             LogicalType::Dictionary { inner },

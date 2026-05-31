@@ -1,16 +1,16 @@
-//! Integration tests for catalog mode (PLAN_V2 §6.5).
+//! Integration tests for catalog mode.
 //!
 //! Acceptance items:
 //!
 //! 1. Register-then-write — `Catalog::add_schema` + `HeliumWriter::with_catalog_ref`
 //! 2. Convenience wrapper — `Catalog::open_writer` (register + write in one call)
 //! 3. Write-then-read — `HeliumReader::new_with_resolver` resolves hash via catalog
-//! 4. Missing-catalog / unknown-hash error wording (§6.5 Surface E)
-//! 5. v4-without-resolver rejected (no silent corruption)
-//! 6. catalog (v6) schema-slot CRC catches single-bit hash corruption
+//! 4. Missing-catalog / unknown-hash error wording
+//! 5. catalog-mode-without-resolver rejected (no silent corruption)
+//! 6. catalog-mode schema-slot CRC catches single-bit hash corruption
 //! 7. Multi-file shared-schema scenario — total bytes-on-disk smaller than
-//!    embedded-schema equivalent (§6.5 final checklist item)
-//! 8. v4 file's reader still rejects unrelated v4 hash (resolver returns Err)
+//!    embedded-schema equivalent
+//! 8. catalog-mode file's reader still rejects unrelated hash (resolver returns Err)
 
 use std::fs;
 use std::io::Cursor;
@@ -128,7 +128,7 @@ fn write_then_read_with_resolver() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Missing-catalog / unknown-hash error wording (§6.5 Surface E)
+// 4. Missing-catalog / unknown-hash error wording
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -137,7 +137,7 @@ fn missing_hash_surfaces_with_greppable_prefix() {
     let catalog = Catalog::open(dir.path()).unwrap();
     let schema = simple_schema();
 
-    // Write a v4 file using a hash that's NOT registered in the catalog.
+    // Write a catalog-mode file using a hash that's NOT registered in the catalog.
     let unregistered_hash = schema_hash(&schema).unwrap();
     let mut buf = Cursor::new(Vec::<u8>::new());
     let mut w =
@@ -197,7 +197,7 @@ fn corrupted_catalog_file_surfaces_with_greppable_prefix() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. v4-without-resolver rejected
+// 5. catalog-mode-without-resolver rejected
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -229,7 +229,7 @@ fn catalog_without_resolver_rejected_with_clear_message() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Catalog (v6) schema-slot CRC catches hash corruption
+// 6. Catalog schema-slot CRC catches hash corruption
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -346,7 +346,7 @@ fn multi_file_shared_schema_smaller_than_embedded() {
         catalog_total += buf.into_inner().len();
     }
 
-    // Write 5 default-mode (v3) files for comparison
+    // Write 5 default-mode (recursive) files for comparison
     let mut embedded_total = 0usize;
     for _ in 0..5 {
         let mut buf = Cursor::new(Vec::<u8>::new());
@@ -460,7 +460,7 @@ fn schema_hash_deterministic_across_clones() {
 }
 
 // ---------------------------------------------------------------------------
-// 11. Writer rejects mismatched (schema, hash) pair (§6.5 Surface C lock)
+// 11. Writer rejects mismatched (schema, hash) pair
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -502,7 +502,7 @@ fn with_catalog_ref_rejects_mismatched_schema_hash() {
 }
 
 // ---------------------------------------------------------------------------
-// 12. v4 round-trip with deeply-nested schema
+// 12. catalog-mode round-trip with deeply-nested schema
 // ---------------------------------------------------------------------------
 
 #[test]

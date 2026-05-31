@@ -13,9 +13,9 @@
 //!
 //! Implements the core mechanism from `helium-design.md`:
 //!
-//! - [`Coder`] + [`NonBlockCoder`] / [`BlockCoder`] traits with the §2 two-way split.
+//! - [`Coder`] + [`NonBlockCoder`] / [`BlockCoder`] traits with the two-way split.
 //! - [`Pipeline`] executor that statically validates non-block-then-block ordering.
-//! - Reference coders spanning the 2×2 of design §2.3.
+//! - Reference coders spanning the 2×2 of block/non-block and integer/byte coders.
 //! - [`Schema`] + [`CoderRegistry`] — a declarative, JSON-serializable schema.
 //! - [`HeliumWriter`] / [`HeliumReader`] — a versioned `.he` file format.
 //!
@@ -36,7 +36,7 @@
 /// Feature gate: `arrow`.
 #[cfg(feature = "arrow")]
 pub mod arrow;
-/// Opt-in shared-schema catalog for v6 (hash-reference) `.he` files.
+/// Opt-in shared-schema catalog for catalog-mode (hash-reference) `.he` files.
 ///
 /// See [`crate::catalog::Catalog`] for the filesystem-backed entry point.
 pub mod catalog;

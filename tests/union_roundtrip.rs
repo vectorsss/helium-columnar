@@ -1,4 +1,4 @@
-//! Round-trip tests for `LogicalType::Union` (§5.5).
+//! Round-trip tests for `LogicalType::Union`.
 //!
 //! Cases covered:
 //! - 2-variant non-null (alternating rows)
@@ -51,7 +51,7 @@ fn roundtrip(spec: ColumnSpec, data: LogicalColumn) -> LogicalColumn {
 }
 
 // ---------------------------------------------------------------------------
-// §5.5: 2-variant non-null — alternating rows
+// 2-variant non-null — alternating rows
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -108,7 +108,7 @@ fn union_2_variant_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.5: 3-variant mixed types — fully populated
+// 3-variant mixed types — fully populated
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -174,7 +174,7 @@ fn union_3_variant_fully_populated() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.5: skewed-to-one-variant
+// skewed-to-one-variant
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -230,7 +230,7 @@ fn union_skewed_to_one_variant() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.5: Union with Struct variant
+// Union with Struct variant
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -290,7 +290,7 @@ fn union_with_struct_variant() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.5: row_count
+// row_count
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -321,7 +321,7 @@ fn union_row_count() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.5: physical_fields dotted-path names
+// physical_fields dotted-path names
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -350,7 +350,7 @@ fn union_physical_fields() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.5: expected_encodings_len
+// expected_encodings_len
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -406,7 +406,7 @@ fn union_expected_encodings_len() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.5: schema JSON "kind": "union" tag + variants array round-trip
+// schema JSON "kind": "union" tag + variants array round-trip
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -443,7 +443,7 @@ fn union_schema_json_kind_tag() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.5: multi-stripe concat
+// multi-stripe concat
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -688,7 +688,7 @@ fn union_compaction_mismatch_in_decompose() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.5: Avro ["null", T] convention
+// Avro ["null", T] convention
 // ---------------------------------------------------------------------------
 
 /// Verify that a Nullable wrapping works as the intended replacement for

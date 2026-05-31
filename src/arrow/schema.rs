@@ -71,7 +71,7 @@ pub fn logical_type_to_arrow(lt: &LogicalType) -> ArrowDataType {
         LogicalType::Utf8 => ArrowDataType::Utf8,
         LogicalType::Binary => ArrowDataType::Binary,
 
-        // v2 variants mapped to v3 equivalents
+        // legacy flat variants mapped to recursive equivalents
         LogicalType::ArrayOf { data_type } => {
             let inner_dt = helium_data_type_to_arrow(*data_type);
             ArrowDataType::List(Arc::new(ArrowField::new("item", inner_dt, true)))
@@ -83,13 +83,13 @@ pub fn logical_type_to_arrow(lt: &LogicalType) -> ArrowDataType {
         LogicalType::NullableUtf8 => ArrowDataType::Utf8,
         LogicalType::NullableBinary => ArrowDataType::Binary,
 
-        // v3 Dictionary{inner}
+        // recursive Dictionary{inner}
         LogicalType::Dictionary { inner } => ArrowDataType::Dictionary(
             Box::new(ArrowDataType::UInt32),
             Box::new(logical_type_to_arrow(inner)),
         ),
 
-        // v3 types
+        // recursive types
         LogicalType::Struct { fields } => {
             let arrow_fields: Vec<ArrowField> = fields
                 .iter()
@@ -322,7 +322,7 @@ fn arrow_data_type_to_helium(dt: &ArrowDataType) -> Result<LogicalType> {
                     ),
                 });
             }
-            // Produce v3 Dictionary{inner} for all value types.
+            // Produce recursive Dictionary{inner} for all value types.
             let inner_lt = arrow_data_type_to_helium(val_type.as_ref())?;
             Ok(LogicalType::Dictionary {
                 inner: Box::new(inner_lt),

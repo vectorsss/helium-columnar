@@ -155,7 +155,7 @@ pub struct FieldSpec {
 /// Logical column type.
 ///
 /// The `serde(tag = "kind")` shape is wire-format-visible and frozen.
-/// v2 variants (`ArrayOf`, `ArrayOfUtf8`, `Nullable*`) are kept for
+/// The legacy flat variants (`ArrayOf`, `ArrayOfUtf8`, `Nullable*`) are kept for
 /// read compatibility; new writers use `List`, `Map`, `Nullable`, `Union`, etc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -175,21 +175,21 @@ pub enum LogicalType {
     ///
     /// Physical: `[offsets: U32, data: Bytes]`.
     Binary,
-    /// v2 — readable; new writer uses `List`.
+    /// Legacy flat variant — readable; new writer uses `List`.
     ArrayOf {
         /// Element type of the array.
         data_type: DataType,
     },
-    /// v2 — readable; new writer uses `List(Utf8)`.
+    /// Legacy flat variant — readable; new writer uses `List(Utf8)`.
     ArrayOfUtf8,
-    /// v2 — readable; new writer uses `Nullable(Primitive(T))`.
+    /// Legacy flat variant — readable; new writer uses `Nullable(Primitive(T))`.
     NullablePrim {
         /// The primitive element type.
         data_type: DataType,
     },
-    /// v2 — readable; new writer uses `Nullable(Utf8)`.
+    /// Legacy flat variant — readable; new writer uses `Nullable(Utf8)`.
     NullableUtf8,
-    /// v2 — readable; new writer uses `Nullable(Binary)`.
+    /// Legacy flat variant — readable; new writer uses `Nullable(Binary)`.
     NullableBinary,
     /// Composite type. `ColumnSpec::encodings` must be empty; leaf encodings
     /// live in child `FieldSpec::encodings`.
@@ -243,7 +243,7 @@ pub enum LogicalType {
     /// Dictionary-encoded column: `indices` reference distinct values held in a
     /// dictionary column of `inner` type.
     ///
-    /// The v3 dictionary-encoded column type —
+    /// The recursive dictionary-encoded column type —
     /// `inner` may be any `LogicalType`.
     ///
     /// Physical layout: `inner.physical_fields()` first (verbatim, in order),
@@ -258,7 +258,7 @@ pub enum LogicalType {
     },
 
     // -----------------------------------------------------------------------
-    // Semantic type extensions (v3 vocabulary — not new physical types;
+    // Semantic type extensions (recursive vocabulary — not new physical types;
     // each decomposes into existing `DataType` leaves so the codec is
     // unchanged.  The `"kind"` discriminant values, inner field names, and
     // enum member names for `DateUnit` / `TimeUnit` are wire-format-frozen
@@ -662,7 +662,7 @@ impl ColumnSpec {
         Self::new(name, LogicalType::Binary, vec![offsets, data])
     }
 
-    /// Construct an `ArrayOf` (v2) primitive array column.
+    /// Construct an `ArrayOf` (legacy flat) primitive array column.
     pub fn array_of(
         name: impl Into<String>,
         data_type: DataType,
@@ -676,7 +676,7 @@ impl ColumnSpec {
         )
     }
 
-    /// Construct a `NullablePrim` (v2) nullable primitive column.
+    /// Construct a `NullablePrim` (legacy flat) nullable primitive column.
     pub fn nullable_prim(
         name: impl Into<String>,
         data_type: DataType,
@@ -690,7 +690,7 @@ impl ColumnSpec {
         )
     }
 
-    /// Construct a `NullableUtf8` (v2) nullable string column.
+    /// Construct a `NullableUtf8` (legacy flat) nullable string column.
     pub fn nullable_utf8(
         name: impl Into<String>,
         present: Vec<CoderSpec>,
@@ -704,7 +704,7 @@ impl ColumnSpec {
         )
     }
 
-    /// Construct a `NullableBinary` (v2) nullable binary column.
+    /// Construct a `NullableBinary` (legacy flat) nullable binary column.
     pub fn nullable_binary(
         name: impl Into<String>,
         present: Vec<CoderSpec>,
@@ -718,7 +718,7 @@ impl ColumnSpec {
         )
     }
 
-    /// Construct an `ArrayOfUtf8` (v2) string-array column.
+    /// Construct an `ArrayOfUtf8` (legacy flat) string-array column.
     pub fn array_of_utf8(
         name: impl Into<String>,
         outer_offsets: Vec<CoderSpec>,
@@ -1464,7 +1464,7 @@ pub enum LogicalColumn {
     /// (`dictionary.row_count()` == cardinality); `indices[i]` is the 0-based
     /// dictionary slot for logical row `i`. `indices.len()` == logical row count.
     ///
-    /// This is the v3 dictionary-encoded column variant.
+    /// This is the recursive dictionary-encoded column variant.
     Dictionary {
         /// The distinct values in insertion order.
         dictionary: Box<LogicalColumn>,
@@ -2515,7 +2515,7 @@ impl LogicalColumn {
     /// Return the logical rows `[start..start+len)` as a fresh `LogicalColumn`
     /// of the same variant.
     ///
-    /// For `Nullable`, `Union`, and legacy v2 nullable variants the inner
+    /// For `Nullable`, `Union`, and legacy flat nullable variants the inner
     /// **compact** storage is sliced correctly — only the values that actually
     /// exist in the requested row range are copied.
     ///
@@ -2604,7 +2604,7 @@ impl LogicalColumn {
                 })
             }
 
-            // ---- Nullable (v3) -----------------------------------------------
+            // ---- Nullable (recursive) ----------------------------------------
             // present[i] tells whether row i has a value.
             // value is compact: only rows where present[i]==true.
             // compact_offset = number of true bits before `start`.
@@ -2646,7 +2646,7 @@ impl LogicalColumn {
                 })
             }
 
-            // ---- Legacy v2 nullable types ------------------------------------
+            // ---- Legacy flat nullable types ----------------------------------
             Self::NullablePrim { present, values } => {
                 let compact_offset = present[..start].iter().filter(|&&p| p).count();
                 let n_present = present[start..start + len].iter().filter(|&&p| p).count();
@@ -2684,7 +2684,7 @@ impl LogicalColumn {
                 indices: indices[start..start + len].to_vec(),
             }),
 
-            // ---- Legacy v2 array types ---------------------------------------
+            // ---- Legacy flat array types -------------------------------------
             Self::ArrayOf { offsets, values } => {
                 let base = offsets[start] as usize;
                 let end = offsets[start + len] as usize;

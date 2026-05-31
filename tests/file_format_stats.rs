@@ -150,7 +150,7 @@ fn stats_all_nan_f64() {
 
 #[test]
 fn stats_nullable_i64() {
-    // v2 NullablePrim style.
+    // legacy flat NullablePrim style.
     let schema = Schema::new(vec![ColumnSpec::nullable_prim(
         "col",
         DataType::I64,
@@ -430,15 +430,10 @@ fn stats_disabled_writer() {
 // 11. Backward compat — old-file fixture reads without error, stats=None
 // ---------------------------------------------------------------------------
 
-/// This test uses the pre-built v2 bytes from the v2_back_compat test suite
-/// by constructing equivalent in-memory bytes that match the v2 format
-/// (uncompressed schema/footer, no crc, no stats fields).
-///
-/// Since we don't have a `.he` artifact file, we write a file with a
-/// stats-disabled writer, then manually verify that a standard writer also
-/// produces files whose `stripe_column_stats` returns `Some(...)` but with
-/// actual stats — confirming that the reader can distinguish "no stats" from
-/// "empty stats".
+/// Footer-stats fields are optional (`#[serde(default)]`), so a footer written
+/// without them must still parse — absent stats deserialize to `None` rather
+/// than erroring. This confirms the reader distinguishes "no stats" from
+/// "empty stats", and that out-of-range stripe lookups return `None`.
 #[test]
 fn stats_backward_compat_old_footer() {
     // A footer written without stats fields must still parse — the optional
@@ -459,9 +454,8 @@ fn stats_backward_compat_old_footer() {
     .expect("write");
     let bytes = w.finish().expect("finish").into_inner();
 
-    // The file is v5. To simulate an old (v3) footer that has no stats fields,
-    // we verify that reading the actual v5 file works correctly (stats present)
-    // then also verify that stripe_column_stats returns None for out-of-range stripes.
+    // Verify that reading the file works correctly (stats present), and that
+    // stripe_column_stats returns None for out-of-range stripes.
     let reader = HeliumReader::new(Cursor::new(bytes.clone()), &registry).expect("reader");
     // Valid stats for the one stripe.
     let stats = reader.stripe_column_stats(0, "col").expect("stats present");
@@ -565,7 +559,7 @@ fn stats_footer_size_overhead() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn stats_nullable_v3_style() {
+fn stats_nullable_recursive_style() {
     // Nullable { inner: I64 } (new recursive-type style).
     let schema = Schema::new(vec![ColumnSpec::nullable(
         "col",

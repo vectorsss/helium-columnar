@@ -111,7 +111,7 @@ impl Default for OptimizerConfig {
 ///
 /// The optimizer measures compressed size on sample data and picks the
 /// pipeline that produces the fewest bytes for each physical leaf column.
-/// It handles all `LogicalType` variants including v3 recursive types
+/// It handles all `LogicalType` variants including recursive types
 /// (Struct, List, Map, Nullable, Union).
 ///
 /// # Usage pattern

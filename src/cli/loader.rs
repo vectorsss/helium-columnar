@@ -5,7 +5,7 @@
 //! | Extension | Schema inference | Data loading |
 //! |---|---|---|
 //! | `.csv` | `helium_schema::csv` | Flat columns (Primitive / Utf8 / Nullable) |
-//! | `.json` / `.ndjson` | `helium_schema::json` | Recursive v3 nested types |
+//! | `.json` / `.ndjson` | `helium_schema::json` | Recursive nested types |
 //! | `.parquet` | `helium_schema::parquet` | Flat columns via row API |
 //! | `.avsc` | `helium_schema::avro` | Schema-only; no binary data |
 //! | `.avro` | `helium_schema::avro` | Full nested data via Avro OCF reader |
@@ -16,7 +16,7 @@
 //! can be passed directly to [`helium_optimizer::Optimizer::optimize`] or written
 //! via [`helium_core::HeliumWriter`].
 //!
-//! The JSON loader supports all v3 recursive `LogicalType` variants (Struct, List,
+//! The JSON loader supports all recursive `LogicalType` variants (Struct, List,
 //! Map, Nullable, Union).  The CSV and Parquet loaders support flat column types
 //! only (Primitive, Utf8, Binary, Nullable of those).
 //!
@@ -794,11 +794,11 @@ fn slice_and_callback(
 /// Null sentinels recognised in CSV fields.
 const CSV_NULLS: &[&str] = &["", "NULL", "null", "NA"];
 
-/// Build a v3-shaped [`LogicalColumn`] directly from a slice of
+/// Build a recursive-shaped [`LogicalColumn`] directly from a slice of
 /// [`serde_json::Value`]s — one per row — matching `lt` recursively.
 ///
-/// This is the canonical JSON data loader for all v3 `LogicalType` variants.
-/// Legacy v2 variants (`NullablePrim`, `NullableUtf8`, etc.) are also handled
+/// This is the canonical JSON data loader for all recursive `LogicalType` variants.
+/// Legacy flat variants (`NullablePrim`, `NullableUtf8`, etc.) are also handled
 /// by delegating to the flat string path for back-compat.
 pub fn json_values_to_logical_column(
     values: &[serde_json::Value],
@@ -1056,7 +1056,7 @@ pub fn json_values_to_logical_column(
         }
 
         // ----------------------------------------------------------------
-        // Legacy v2 flat variants — delegate to the string path for back-compat
+        // Legacy flat variants — delegate to the string path for back-compat
         // ----------------------------------------------------------------
         LogicalType::NullablePrim { data_type } => {
             let nulls = json_null_sentinels();
@@ -1163,14 +1163,14 @@ fn pick_union_variant(
         })
 }
 
-/// Null sentinels used when falling back to string-based loading for v2 types.
+/// Null sentinels used when falling back to string-based loading for legacy flat types.
 fn json_null_sentinels() -> Vec<&'static str> {
     let mut nulls: Vec<&str> = CSV_NULLS.to_vec();
     nulls.push("null");
     nulls
 }
 
-/// Flatten JSON values to strings for legacy v2 type back-compat paths.
+/// Flatten JSON values to strings for legacy flat type back-compat paths.
 fn json_values_to_strings(values: &[serde_json::Value]) -> Vec<String> {
     values.iter().map(json_value_to_string).collect()
 }
@@ -1343,7 +1343,7 @@ pub fn strings_to_logical_column(
              use a Parquet source with a matching nested schema instead",
             lt
         ),
-        // Legacy v2 flat types — treat same as the recursive equivalents.
+        // Legacy flat types — treat same as the recursive equivalents.
         LogicalType::NullablePrim { data_type } => {
             let (present, non_null_strs) = split_nullable(values, nulls);
             let cd = parse_primitive_vec(&non_null_strs, *data_type)?;
@@ -1374,7 +1374,7 @@ pub fn strings_to_logical_column(
             )
         }
         LogicalType::ArrayOf { .. } | LogicalType::ArrayOfUtf8 => {
-            bail!("v2 array types are not supported by the flat loader")
+            bail!("legacy flat array types are not supported by the flat loader")
         }
         // Semantic types: parse from string representation.
         LogicalType::Decimal128 { .. } => {

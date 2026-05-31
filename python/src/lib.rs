@@ -8,7 +8,7 @@
 //! - `write_he(path, data: dict) -> None`
 //! - `read_he(path) -> dict`
 //!
-//! Arrow / pandas interop (full v3 type set — nullable, nested, semantic):
+//! Arrow / pandas interop (full recursive type set — nullable, nested, semantic):
 //! - `write_table(path, table_or_df, optimize=True, stripe_rows=None) -> None`
 //! - `read_table(path, columns=None, stripe_range=None) -> pyarrow.Table`
 //!

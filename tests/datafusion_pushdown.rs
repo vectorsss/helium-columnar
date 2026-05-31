@@ -533,12 +533,12 @@ fn fallback_c1_stats_disabled() {
 }
 
 // ---------------------------------------------------------------------------
-// D. Catalog mode (v6) — same correctness as standard mode
+// D. Catalog mode — same correctness as standard mode
 // ---------------------------------------------------------------------------
 
-/// Test D1: Catalog-mode (v6) file produces correct query results with pruning.
+/// Test D1: Catalog-mode file produces correct query results with pruning.
 #[test]
-fn catalog_d1_v6_correctness() {
+fn catalog_d1_correctness() {
     use helium::catalog::Catalog;
 
     let dir = tempfile::tempdir().unwrap();
@@ -572,7 +572,7 @@ fn catalog_d1_v6_correctness() {
     .expect("write stripe 1");
     w.finish().expect("finish");
 
-    // HeliumTableProvider::try_new_with_catalog reads v6 files using the
+    // HeliumTableProvider::try_new_with_catalog reads catalog-mode files using the
     // catalog as the resolver for the schema hash.
     let resolver = catalog.resolver();
     let provider = HeliumTableProvider::try_new_with_catalog(tmp.path(), move |h| resolver(h))

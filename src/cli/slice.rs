@@ -12,9 +12,9 @@ use helium::{CoderRegistry, HeliumReader};
 ///
 /// Opens `input`, projects exactly `columns` (in the given order, preserving
 /// each column's encodings and the source's stripe boundaries) and writes them
-/// to `output` as a fresh self-contained (v5) `.he` file.
+/// to `output` as a fresh self-contained `.he` file.
 ///
-/// `catalog_dir` is only needed to *read* a v4/v6 (catalog-mode) input; the
+/// `catalog_dir` is only needed to *read* a catalog-mode input; the
 /// output is always self-contained.
 pub fn run(
     input: &Path,

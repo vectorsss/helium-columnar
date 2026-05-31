@@ -8,13 +8,13 @@ LOAD 'helium_duckdb';
 SELECT * FROM read_he('path/to/file.he') LIMIT 5;
 SELECT count(*) FROM read_he('path/to/file.he');
 SELECT col_a, col_b FROM read_he('path/to/file.he') WHERE col_a > 100;
--- v6 catalog-mode files: pass the catalog directory by named parameter
+-- catalog-mode files: pass the catalog directory by named parameter
 SELECT * FROM read_he('path/to/file.he', catalog := '/path/to/catalog');
 ```
 
 ## Status
 
-The extension ships the `read_he` table function over the full v3 type set,
+The extension ships the `read_he` table function over the full recursive type set,
 read-only, with:
 
 - **Projection pushdown** — only the columns you select are decoded. Selecting
@@ -24,7 +24,7 @@ read-only, with:
   not once per stripe).
 - **Nested types** — `Struct`, `List`, and `Map` map onto DuckDB STRUCT / LIST /
   MAP vectors.
-- **v6 catalog-mode files** — pass `catalog := '<dir>'` to resolve the schema.
+- **Catalog-mode files** — pass `catalog := '<dir>'` to resolve the schema.
 
 Remaining items (replacement scan, scalar UDFs, and the predicate-pushdown
 caveat below) are tracked in [`docs/ROADMAP.md`](../docs/ROADMAP.md) → *Bindings*.
@@ -154,7 +154,7 @@ LOAD '/absolute/path/to/helium_duckdb.duckdb_extension';
 -- Now query any .he file
 SELECT * FROM read_he('/path/to/file.he') LIMIT 10;
 
--- v6 catalog-mode files: resolve the schema from a catalog directory
+-- catalog-mode files: resolve the schema from a catalog directory
 SELECT * FROM read_he('/path/to/file.he', catalog := '/path/to/catalog') LIMIT 10;
 ```
 
@@ -162,7 +162,7 @@ SELECT * FROM read_he('/path/to/file.he', catalog := '/path/to/catalog') LIMIT 1
 
 The `smoke.sh` script builds `.he` fixtures and runs a real `LOAD` + query suite
 covering projection pushdown, nullable + multi-stripe correctness (values
-straddling stripe/chunk boundaries), nested `Struct` / `List` / `Map`, and v6
+straddling stripe/chunk boundaries), nested `Struct` / `List` / `Map`, and
 catalog-mode reads:
 
 ```bash
@@ -212,7 +212,7 @@ These are tracked in [`docs/ROADMAP.md`](../docs/ROADMAP.md) → *Bindings*.
   unit-tested (`src/prune.rs`), but the DuckDB *loadable* extension C-API
   (v1.2.0) exposes no filter-pushdown hook, so DuckDB never passes the
   extension the `WHERE` bounds. See the "note on predicate pushdown" above.
-- **`Union` and v2 `ArrayOf` / `ArrayOfUtf8` are not yet projected.** They error
+- **`Union` and legacy flat `ArrayOf` / `ArrayOfUtf8` are not yet projected.** They error
   at bind time with a clear message. `Struct`, `List`, and `Map` are supported.
 - **Read-only.** The extension queries existing `.he` files; produce them with
   the `helium` CLI or library.
@@ -223,6 +223,6 @@ The extension is compiled against the DuckDB C extension API v1.2.0 and is
 compatible with DuckDB 1.2.0 and later.  The `-unsigned` flag is required for
 all locally-built, unsigned extensions regardless of DuckDB version.
 
-The Rust crate (`duckdb` v1.10502.0) uses the C extension ABI, not the bundled
+The Rust crate (`duckdb` 1.10502.0) uses the C extension ABI, not the bundled
 DuckDB library, so the compiled extension works with any matching DuckDB CLI
 version without re-linking.

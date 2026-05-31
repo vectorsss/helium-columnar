@@ -232,7 +232,7 @@ fn footer_compressed_smaller_than_raw_json() {
     ) as usize;
 
     // Compute what the raw uncompressed footer JSON would be. We can do this
-    // by building an equivalent v3 file (raw footer) and measuring its footer
+    // by building an equivalent self-contained file (raw footer) and measuring its footer
     // JSON length. Alternatively, we measure the compressed bytes vs the
     // decompressed bytes.
     let compressed_footer = &file_bytes[file_len - 20 - footer_len_on_disk..file_len - 20];

@@ -67,7 +67,7 @@ impl DataType {
 
 /// Whether a coder operates per-element (streaming) or on the whole buffer at once.
 ///
-/// Used by [`Pipeline::new`](crate::Pipeline::new) to enforce the design §2.2 ordering rule:
+/// Used by [`Pipeline::new`](crate::Pipeline::new) to enforce the ordering rule:
 /// non-block stages must precede all block stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoderKind {

@@ -52,7 +52,7 @@ pub(super) const MAX_BLOOM_BYTES: usize = 65_536; // 64 KB = 524 288 bits
 /// # Wire-format stability
 ///
 /// All existing variant names (`i8`..`binary`) are frozen.  The three semantic
-/// variants added in v3-schema era (`decimal128`, `date`, `datetime`) are
+/// variants added in the recursive-schema era (`decimal128`, `date`, `datetime`) are
 /// likewise frozen — do not rename them.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -773,7 +773,7 @@ pub(super) fn compute_filters_for_logical_column(
             result.extend(compute_filters_for_logical_column(values, value));
             result
         }
-        // --- Nullable (v3): present + inner ---
+        // --- Nullable (recursive): present + inner ---
         (LogicalColumn::Nullable { value, .. }, LogicalType::Nullable { inner }) => {
             let mut result = vec![None]; // present bitmap
             result.extend(compute_filters_for_logical_column(value, inner));
@@ -978,12 +978,12 @@ pub(super) fn compute_stats_for_logical_column(
             };
             vec![(None, None, Some(0)), (mn, mx, Some(0))]
         }
-        // --- v2 ArrayOf ---
+        // --- legacy flat ArrayOf ---
         (LogicalColumn::ArrayOf { values, .. }, _) => {
             let (mn, mx) = compute_min_max(values);
             vec![(None, None, Some(0)), (mn, mx, Some(0))]
         }
-        // --- v2 ArrayOfUtf8 ---
+        // --- legacy flat ArrayOfUtf8 ---
         (LogicalColumn::ArrayOfUtf8 { strings, .. }, _) => {
             let (mn, mx) = match (strings.iter().min(), strings.iter().max()) {
                 (Some(min), Some(max)) => (
@@ -999,7 +999,7 @@ pub(super) fn compute_stats_for_logical_column(
                 (mn, mx, Some(0)),
             ]
         }
-        // --- v2 NullablePrim ---
+        // --- legacy flat NullablePrim ---
         (LogicalColumn::NullablePrim { present, values }, _) => {
             let null_count = present.iter().filter(|&&p| !p).count() as u64;
             // Filter to only present values for stats
@@ -1010,7 +1010,7 @@ pub(super) fn compute_stats_for_logical_column(
             };
             vec![(None, None, Some(null_count)), (mn, mx, Some(null_count))]
         }
-        // --- v2 NullableUtf8 ---
+        // --- legacy flat NullableUtf8 ---
         (LogicalColumn::NullableUtf8 { present, strings }, _) => {
             let null_count = present.iter().filter(|&&p| !p).count() as u64;
             let (mn, mx) = match (strings.iter().min(), strings.iter().max()) {
@@ -1026,7 +1026,7 @@ pub(super) fn compute_stats_for_logical_column(
                 (mn, mx, Some(null_count)),
             ]
         }
-        // --- v2 NullableBinary ---
+        // --- legacy flat NullableBinary ---
         (LogicalColumn::NullableBinary { present, blobs }, _) => {
             let null_count = present.iter().filter(|&&p| !p).count() as u64;
             let min_blob = blobs.iter().min_by(|a, b| a.as_slice().cmp(b.as_slice()));
@@ -1077,7 +1077,7 @@ pub(super) fn compute_stats_for_logical_column(
             result.extend(compute_stats_for_logical_column(values, value));
             result
         }
-        // --- Nullable (v3): present bitmap (no stats) + inner leaves ---
+        // --- Nullable (recursive): present bitmap (no stats) + inner leaves ---
         (LogicalColumn::Nullable { present, value }, LogicalType::Nullable { inner }) => {
             let null_count = present.iter().filter(|&&p| !p).count() as u64;
             let mut result = vec![(None, None, Some(null_count))]; // present bitmap

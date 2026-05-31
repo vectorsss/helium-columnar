@@ -10,7 +10,7 @@
 #   1. Build + package the extension with the pinned C-API ABI (Cargo.lock).
 #   2. On platforms with a DuckDB CLI available, run duckdb/smoke.sh — a real
 #      LOAD + query over generated .he files (projection, nullable/multi-stripe,
-#      nested types, v6 catalog).
+#      nested types, catalog mode).
 #   3. Upload the packaged .duckdb_extension as a build artifact.
 
 jobs:

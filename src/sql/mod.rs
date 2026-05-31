@@ -108,7 +108,7 @@ pub struct HeliumTableProvider {
     path: PathBuf,
     /// Arrow schema derived from the Helium schema (all columns).
     arrow_schema: SchemaRef,
-    /// Cached Helium schema for metadata access and as in-memory resolver for v6 files.
+    /// Cached Helium schema for metadata access and as in-memory resolver for catalog-mode files.
     helium_schema: Arc<HeliumSchema>,
     /// Number of stripes in the file.
     stripe_count: usize,
@@ -161,10 +161,10 @@ impl HeliumTableProvider {
         Self::from_reader(path, reader)
     }
 
-    /// Open a v4/v6 (catalog-mode) `.he` file with a schema resolver.
+    /// Open a catalog-mode `.he` file with a schema resolver.
     ///
     /// The resolver is called with the BLAKE3 hash stored in the file header to
-    /// look up the schema from the caller's catalog directory.  For v5 (standard)
+    /// look up the schema from the caller's catalog directory.  For self-contained
     /// files the resolver is ignored.
     ///
     /// # Errors

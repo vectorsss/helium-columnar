@@ -2,8 +2,8 @@
 //!
 //! Covers:
 //! - Flat column types: Primitive(I32/I64/F32/F64), Utf8, Binary
-//! - v2 compatibility: NullablePrim, NullableUtf8, NullableBinary
-//! - v3 nested: Struct, List<Primitive>, List<Utf8>, Map<Utf8,Primitive>,
+//! - legacy flat compatibility: NullablePrim, NullableUtf8, NullableBinary
+//! - recursive nested: Struct, List<Primitive>, List<Utf8>, Map<Utf8,Primitive>,
 //!   Nullable<Struct>, deep nesting (5 levels)
 //! - Semantic types: Decimal128, Date32 (Date{Days}), Date64 (Date{Millis}), Datetime
 //! - Edge cases: all-null Nullable, empty Struct, single-row List, all-same-value column
@@ -137,7 +137,7 @@ fn optimize_binary() {
 }
 
 // ---------------------------------------------------------------------------
-// v2 compatibility types
+// legacy flat compatibility types
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -178,8 +178,8 @@ fn optimize_nullable_prim_i32() {
 }
 
 #[test]
-fn optimize_v2_nullable_utf8() {
-    // v2 NullableUtf8 type
+fn optimize_flat_nullable_utf8() {
+    // legacy flat NullableUtf8 type
     let present: Vec<bool> = (0..50).map(|i| i % 4 != 0).collect();
     let strings: Vec<String> = present
         .iter()
@@ -246,7 +246,7 @@ fn optimize_dict_prim_i32() {
 }
 
 // ---------------------------------------------------------------------------
-// v3 Struct
+// recursive Struct
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -331,7 +331,7 @@ fn optimize_struct_empty_fields() {
 }
 
 // ---------------------------------------------------------------------------
-// v3 List
+// recursive List
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -364,11 +364,11 @@ fn optimize_list_primitive_i32() {
     let result = roundtrip_spec(spec, lc2);
     if let LogicalColumn::List {
         offsets: off2,
-        values: v2,
+        values: vals2,
     } = result
     {
         assert_eq!(off2, offsets);
-        assert_eq!(*v2, LogicalColumn::Primitive(ColumnData::I32(items)));
+        assert_eq!(*vals2, LogicalColumn::Primitive(ColumnData::I32(items)));
     } else {
         panic!("expected List");
     }
@@ -424,7 +424,7 @@ fn optimize_list_single_row() {
 }
 
 // ---------------------------------------------------------------------------
-// v3 Map
+// recursive Map
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -460,7 +460,7 @@ fn optimize_map_utf8_to_primitive() {
 }
 
 // ---------------------------------------------------------------------------
-// v3 Nullable
+// recursive Nullable
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -498,19 +498,19 @@ fn optimize_nullable_primitive() {
     let result = roundtrip_spec(spec, lc2);
     if let LogicalColumn::Nullable {
         present: p2,
-        value: v2,
+        value: vals2,
     } = result
     {
         assert_eq!(p2, present);
-        assert_eq!(*v2, LogicalColumn::Primitive(ColumnData::I32(values)));
+        assert_eq!(*vals2, LogicalColumn::Primitive(ColumnData::I32(values)));
     } else {
         panic!("expected Nullable");
     }
 }
 
 #[test]
-fn optimize_v3_nullable_utf8() {
-    // v3 Nullable<Utf8>
+fn optimize_recursive_nullable_utf8() {
+    // recursive Nullable<Utf8>
     let present: Vec<bool> = (0..50).map(|i| i % 3 != 0).collect();
     let strings: Vec<String> = present
         .iter()
@@ -562,16 +562,16 @@ fn optimize_all_null_nullable() {
     let result = roundtrip_spec(spec, lc2);
     if let LogicalColumn::Nullable {
         present: p2,
-        value: v2,
+        value: vals2,
     } = result
     {
         assert_eq!(p2, present);
-        assert_eq!(*v2, LogicalColumn::Primitive(ColumnData::I32(vec![])));
+        assert_eq!(*vals2, LogicalColumn::Primitive(ColumnData::I32(vec![])));
     }
 }
 
 // ---------------------------------------------------------------------------
-// v3 Struct with nested types
+// recursive Struct with nested types
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -631,7 +631,7 @@ fn optimize_nullable_struct() {
 }
 
 // ---------------------------------------------------------------------------
-// v3 Union
+// recursive Union
 // ---------------------------------------------------------------------------
 
 #[test]

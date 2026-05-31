@@ -114,9 +114,9 @@ pub struct ConvertOptions<'a> {
 ///
 /// When `opts.catalog_dir` is `Some`:
 /// - If converting external → `.he`, uses [`Catalog::open_writer`] to emit a
-///   v6 (catalog-mode) file and register the schema as a side-effect.
+///   catalog-mode file and register the schema as a side-effect.
 /// - If converting `.he` → external, uses [`HeliumReader::new_with_resolver`]
-///   so v4/v6 inputs are readable.
+///   so catalog-mode inputs are readable.
 /// - If neither side is `.he`, prints a warning and continues without using the
 ///   catalog.
 ///
@@ -235,7 +235,7 @@ fn import_to_he(
         .with_context(|| format!("creating output file '{}'", output.display()))?;
 
     let mut writer = if let Some(cat_dir) = catalog_dir {
-        // Catalog mode: emit v6 and register schema as a side-effect.
+        // Catalog mode: emit a catalog-mode file and register schema as a side-effect.
         let catalog = Catalog::open(cat_dir)
             .with_context(|| format!("opening catalog at '{}'", cat_dir.display()))?;
         catalog
@@ -316,7 +316,7 @@ fn export_he(
         File::open(input).with_context(|| format!("opening .he file '{}'", input.display()))?;
     let registry = CoderRegistry::default();
     let mut reader = if let Some(cat_dir) = catalog_dir {
-        // Catalog mode: use resolver so v4/v6 inputs are readable.
+        // Catalog mode: use resolver so catalog-mode inputs are readable.
         let catalog = Catalog::open(cat_dir)
             .with_context(|| format!("opening catalog at '{}'", cat_dir.display()))?;
         HeliumReader::new_with_resolver(file, &registry, catalog.resolver()).with_context(|| {

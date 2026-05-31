@@ -1,7 +1,7 @@
 //! 5G Measurement-Report — synthetic generator + compression comparison report.
 //!
 //! Validates Helium against the "Avro + zstd" storage pattern on MR-shaped
-//! nested data and exercises all Helium v3 nested types in a single test:
+//! nested data and exercises all Helium recursive nested types in a single test:
 //!   * `List<Struct>` — neighbor cell array
 //!   * `Map<Utf8, F32>` — custom KPI map
 //!   * `Nullable<Utf8>` — location string

@@ -1,4 +1,4 @@
-//! Round-trip tests for the v3 `Dictionary { inner }` logical type.
+//! Round-trip tests for the recursive `Dictionary { inner }` logical type.
 //!
 //! Covers:
 //! - `Dictionary { inner: Utf8 }` — the common string-dict case

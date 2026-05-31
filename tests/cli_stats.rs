@@ -391,7 +391,7 @@ fn stats_multi_stripe_rows_and_bytes() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8 — --catalog: smoke test (v6 file readable via catalog)
+// Test 8 — --catalog: smoke test (catalog-mode file readable via catalog)
 // ---------------------------------------------------------------------------
 
 #[test]

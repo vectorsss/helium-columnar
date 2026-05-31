@@ -1,4 +1,4 @@
-//! Round-trip tests for `LogicalType::List` (§5.2).
+//! Round-trip tests for `LogicalType::List`.
 //!
 //! Tests covered:
 //! - `List<Primitive>` (basic integer list)
@@ -11,7 +11,7 @@
 //! - `row_count()` for List
 //! - multi-stripe write/read concatenation for List
 //! - schema JSON `"kind": "list"` tag round-trip
-//! - v2 back-compat: `ArrayOf` and `ArrayOfUtf8` schemas remain readable
+//! - legacy flat back-compat: `ArrayOf` and `ArrayOfUtf8` schemas remain readable
 //! - validation error cases
 
 use std::io::Cursor;
@@ -57,7 +57,7 @@ fn roundtrip(spec: ColumnSpec, data: LogicalColumn) -> LogicalColumn {
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 test: List<Primitive>
+// List<Primitive>
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -151,7 +151,7 @@ fn list_of_primitive_zero_rows() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 test: List<Utf8>
+// List<Utf8>
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -223,7 +223,7 @@ fn list_of_utf8_with_empty_strings() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 test: List<Struct>
+// List<Struct>
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -275,7 +275,7 @@ fn list_of_struct_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 test: List<List<T>>
+// List<List<T>>
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -338,7 +338,7 @@ fn list_of_list_of_primitive_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 test: physical_fields() for List
+// physical_fields() for List
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -409,7 +409,7 @@ fn list_physical_fields_list_inner() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 test: expected_encodings_len()
+// expected_encodings_len()
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -446,7 +446,7 @@ fn expected_encodings_len_list_variants() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 test: row_count() for List
+// row_count() for List
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -467,7 +467,7 @@ fn list_row_count() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 test: schema JSON "kind": "list" tag round-trip
+// schema JSON "kind": "list" tag round-trip
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -520,7 +520,7 @@ fn nested_list_schema_json_round_trip() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 test: multi-stripe write/read concatenation for List
+// multi-stripe write/read concatenation for List
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -574,12 +574,12 @@ fn list_multi_stripe_concat() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 back-compat test: v2 ArrayOf remains readable
+// back-compat test: legacy flat ArrayOf remains readable
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v2_array_of_remains_readable() {
-    // Write using v2 ArrayOf schema
+fn flat_array_of_remains_readable() {
+    // Write using legacy flat ArrayOf schema
     let spec = ColumnSpec::array_of("tags", DataType::I32, delta_leb_zstd(), delta_leb_zstd());
     let schema = Schema::new(vec![spec.clone()]);
     let reg = registry();
@@ -598,7 +598,7 @@ fn v2_array_of_remains_readable() {
     writer.write_column("tags", data).expect("write");
     writer.finish().expect("finish");
 
-    // Read back — must still work with v3 reader
+    // Read back — must still work with the recursive reader
     buf.set_position(0);
     let mut reader = HeliumReader::new(&mut buf, &reg).expect("reader");
     let result = reader.read_column("tags").expect("read");
@@ -614,8 +614,8 @@ fn v2_array_of_remains_readable() {
 }
 
 #[test]
-fn v2_array_of_utf8_remains_readable() {
-    // Write using v2 ArrayOfUtf8 schema
+fn flat_array_of_utf8_remains_readable() {
+    // Write using legacy flat ArrayOfUtf8 schema
     let spec = ColumnSpec::array_of_utf8("names", delta_leb_zstd(), delta_leb_zstd(), zstd_only());
     let schema = Schema::new(vec![spec]);
     let reg = registry();
@@ -649,10 +649,10 @@ fn v2_array_of_utf8_remains_readable() {
 }
 
 #[test]
-fn v2_array_of_schema_json_still_deserializes() {
-    // Confirm that a v2 ArrayOf schema JSON is still parseable by the v3 reader.
+fn flat_array_of_schema_json_still_deserializes() {
+    // Confirm that a legacy flat ArrayOf schema JSON is still parseable by the recursive reader.
     let json = r#"{"version":1,"columns":[{"name":"x","logical_type":{"kind":"array_of","data_type":"i32"},"encodings":[[{"id":"zstd"}],[{"id":"zstd"}]]}]}"#;
-    let schema = Schema::from_json(json.as_bytes()).expect("should parse v2 ArrayOf schema");
+    let schema = Schema::from_json(json.as_bytes()).expect("should parse legacy flat ArrayOf schema");
     assert!(matches!(
         schema.columns[0].logical_type,
         LogicalType::ArrayOf {

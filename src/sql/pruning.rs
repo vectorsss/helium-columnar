@@ -449,7 +449,7 @@ impl<'a> LeafSelection<'a> {
             LogicalType::NullablePrim { .. } => Some((1, Some(0))),
             // NullableUtf8 / NullableBinary: present at 0, offsets at 1, data at 2
             LogicalType::NullableUtf8 | LogicalType::NullableBinary => Some((2, Some(0))),
-            // v3 Nullable wrapping a single-leaf type: present at 0, leaf at 1
+            // recursive Nullable wrapping a single-leaf type: present at 0, leaf at 1
             LogicalType::Nullable { inner } => {
                 match inner.as_ref() {
                     LogicalType::Primitive { .. } => Some((1, Some(0))),

@@ -1,32 +1,33 @@
-//! v2 → v3 back-compat consolidation pass (§5.6).
+//! Schema back-compatibility boundary.
 //!
-//! Goal: prove that **every remaining v2 `LogicalType` variant remains readable
-//! by the v3 reader**, and that v2-shaped schema JSON still parses through
-//! `Schema::from_json`. This is a single grep-able boundary:
+//! Goal: prove that **every legacy flat `LogicalType` variant remains readable**
+//! and that legacy-shaped schema JSON still parses through `Schema::from_json`,
+//! even though new schemas use the recursive (Struct/List/Map/Nullable) forms.
+//! This is a single grep-able boundary:
 //!
 //! ```text
-//! cargo test --test v2_back_compat
+//! cargo test --test schema_back_compat
 //! ```
 //!
 //! Coverage:
 //!
-//! - v2 leaf types (`Primitive`, `Utf8`, `Binary`) — full round-trip
-//! - v2 deprecated-for-write but kept-readable types (`ArrayOf`,
+//! - legacy flat leaf types (`Primitive`, `Utf8`, `Binary`) — full round-trip
+//! - legacy flat deprecated-for-write but kept-readable types (`ArrayOf`,
 //!   `ArrayOfUtf8`, `NullablePrim`, `NullableUtf8`, `NullableBinary`)
-//! - hand-crafted v2 schema JSON parses into `LogicalType::*` v2 variants
-//!   exactly (no silent v2→v3 upgrade)
-//! - dual-format isolation: v2-only file and v3-only file can coexist; the
-//!   v3 writer never silently rewrites v2 schemas
+//! - hand-crafted legacy flat schema JSON parses into `LogicalType::*` legacy flat variants
+//!   exactly (no silent flat→recursive upgrade)
+//! - dual-format isolation: flat-only file and recursive-only file can coexist; the
+//!   recursive writer never silently rewrites legacy flat schemas
 //! - `HeliumWriter` is a fresh-file-only constructor — there is no API for
 //!   opening an existing file in write mode (verified by inspection of
 //!   `src/file.rs`: `HeliumWriter::new` is the only constructor, and it
 //!   always writes the magic header at offset 0)
 //!
-//! Note: the legacy v2 dict variants have been fully removed and replaced by
-//! the v3 `Dictionary { inner }` type. Tests for dict-encoded columns live
+//! Note: the legacy flat dict variants have been fully removed and replaced by
+//! the recursive `Dictionary { inner }` type. Tests for dict-encoded columns live
 //! below and in `tests/file_format.rs`.
 //!
-//! Carry-over from §5.5 review:
+//! Carry-over:
 //!
 //! - `union_rejects_256_variants` — exercises the 255-variant cap that
 //!   `validate_nested_type` enforces in `src/schema.rs`.
@@ -63,15 +64,15 @@ fn registry() -> CoderRegistry {
     CoderRegistry::default()
 }
 
-/// Byte-level subsequence search. Used in `dual_format_v2_and_v3_files_coexist`
+/// Byte-level subsequence search. Used in `dual_format_flat_and_recursive_files_coexist`
 /// after decompressing the schema header bytes — the on-disk schema bytes
-/// are zstd-compressed in v3 (PLAN_V2 §6.4), so a raw byte search would
+/// are zstd-compressed, so a raw byte search would
 /// never match the `"kind":"..."` tokens.
 fn contains_subseq(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// Extract and decompress the schema JSON bytes from a v3/v5 `.he` file.
+/// Extract and decompress the schema JSON bytes from a `.he` file.
 ///
 /// File layout: `header(8) | schema_len(4 LE) | <zstd-compressed schema> | body | ...`.
 /// Returns the raw (uncompressed) JSON bytes from a self-contained file.
@@ -101,11 +102,11 @@ fn roundtrip(spec: ColumnSpec, data: LogicalColumn) -> LogicalColumn {
 }
 
 // ---------------------------------------------------------------------------
-// v2 leaf types — Primitive, Utf8, Binary
+// legacy flat leaf types — Primitive, Utf8, Binary
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v2_primitive_i64_roundtrip() {
+fn flat_primitive_i64_roundtrip() {
     let spec = ColumnSpec::primitive("ts", DataType::I64, delta_leb_zstd());
     let values: Vec<i64> = (1_700_000_000..1_700_000_100).collect();
     let data = LogicalColumn::Primitive(ColumnData::I64(values.clone()));
@@ -114,7 +115,7 @@ fn v2_primitive_i64_roundtrip() {
 }
 
 #[test]
-fn v2_primitive_f64_roundtrip() {
+fn flat_primitive_f64_roundtrip() {
     let spec = ColumnSpec::primitive(
         "temp",
         DataType::F64,
@@ -127,7 +128,7 @@ fn v2_primitive_f64_roundtrip() {
 }
 
 #[test]
-fn v2_utf8_roundtrip() {
+fn flat_utf8_roundtrip() {
     let spec = ColumnSpec::utf8("name", delta_leb_zstd(), zstd_only());
     let values: Vec<String> = (0..100).map(|i| format!("user_{i}")).collect();
     let data = LogicalColumn::Utf8(values.clone());
@@ -136,7 +137,7 @@ fn v2_utf8_roundtrip() {
 }
 
 #[test]
-fn v2_binary_roundtrip() {
+fn flat_binary_roundtrip() {
     let spec = ColumnSpec::binary("payload", delta_leb_zstd(), zstd_only());
     let blobs: Vec<Vec<u8>> = (0..20).map(|i| vec![i as u8; (i + 1) as usize]).collect();
     let data = LogicalColumn::Binary(blobs.clone());
@@ -145,12 +146,12 @@ fn v2_binary_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// v2 deprecated-for-write types — ArrayOf, ArrayOfUtf8, NullablePrim,
+// legacy flat deprecated-for-write types — ArrayOf, ArrayOfUtf8, NullablePrim,
 // NullableUtf8, NullableBinary — all kept readable
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v2_array_of_roundtrip() {
+fn flat_array_of_roundtrip() {
     let spec = ColumnSpec::array_of("tags", DataType::I32, delta_leb_zstd(), delta_leb_zstd());
     let offsets: Vec<u32> = vec![0, 3, 3, 5, 7];
     let values = ColumnData::I32(vec![1, 2, 3, 4, 5, 6, 7]);
@@ -171,7 +172,7 @@ fn v2_array_of_roundtrip() {
 }
 
 #[test]
-fn v2_array_of_utf8_roundtrip() {
+fn flat_array_of_utf8_roundtrip() {
     let spec = ColumnSpec::array_of_utf8("words", delta_leb_zstd(), delta_leb_zstd(), zstd_only());
     let offsets: Vec<u32> = vec![0, 2, 3, 5];
     let strings: Vec<String> = vec![
@@ -198,7 +199,7 @@ fn v2_array_of_utf8_roundtrip() {
 }
 
 #[test]
-fn v2_nullable_prim_roundtrip() {
+fn flat_nullable_prim_roundtrip() {
     let spec = ColumnSpec::nullable_prim("v", DataType::I32, present_coders(), delta_leb_zstd());
     let present = vec![true, false, true, false, true, true];
     let values = ColumnData::I32(vec![10, 30, 50, 60]);
@@ -219,7 +220,7 @@ fn v2_nullable_prim_roundtrip() {
 }
 
 #[test]
-fn v2_nullable_utf8_roundtrip() {
+fn flat_nullable_utf8_roundtrip() {
     let spec = ColumnSpec::nullable_utf8("s", present_coders(), delta_leb_zstd(), zstd_only());
     let present = vec![false, true, true, false, true];
     let strings = vec!["hello".to_string(), "world".to_string(), "rust".to_string()];
@@ -240,7 +241,7 @@ fn v2_nullable_utf8_roundtrip() {
 }
 
 #[test]
-fn v2_nullable_binary_roundtrip() {
+fn flat_nullable_binary_roundtrip() {
     let spec = ColumnSpec::nullable_binary("b", present_coders(), delta_leb_zstd(), zstd_only());
     let present = vec![true, false, true];
     let blobs: Vec<Vec<u8>> = vec![vec![0xff, 0xfe], vec![0x00, 0x01, 0x02]];
@@ -261,7 +262,7 @@ fn v2_nullable_binary_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// Dictionary (v3) round-trip — proves dict_encode_utf8 / dict_encode_primitive
+// Dictionary (recursive) round-trip — proves dict_encode_utf8 / dict_encode_primitive
 // return the correct Dictionary{inner} shape and survive the full file round-trip.
 // ---------------------------------------------------------------------------
 
@@ -329,7 +330,7 @@ fn dict_prim_roundtrip() {
 #[test]
 fn dict_multi_stripe_via_read_column_at_stripe() {
     // Multi-stripe dict columns require `read_column_at_stripe` because each
-    // stripe may have its own dictionary. The v3 reader preserves this constraint.
+    // stripe may have its own dictionary. The recursive reader preserves this constraint.
     let spec = ColumnSpec::new(
         "level",
         LogicalType::Dictionary {
@@ -371,14 +372,14 @@ fn dict_multi_stripe_via_read_column_at_stripe() {
 }
 
 // ---------------------------------------------------------------------------
-// v2 schema JSON parsing — hand-crafted shapes deserialize without
-// silent v2→v3 upgrade
+// legacy flat schema JSON parsing — hand-crafted shapes deserialize without
+// silent flat→recursive upgrade
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v2_array_of_schema_json_deserializes_as_array_of() {
+fn flat_array_of_schema_json_deserializes_as_array_of() {
     let json = r#"{"version":1,"columns":[{"name":"x","logical_type":{"kind":"array_of","data_type":"i32"},"encodings":[[{"id":"zstd"}],[{"id":"zstd"}]]}]}"#;
-    let schema = Schema::from_json(json.as_bytes()).expect("v2 ArrayOf JSON should parse");
+    let schema = Schema::from_json(json.as_bytes()).expect("legacy flat ArrayOf JSON should parse");
     assert!(matches!(
         schema.columns[0].logical_type,
         LogicalType::ArrayOf {
@@ -388,9 +389,9 @@ fn v2_array_of_schema_json_deserializes_as_array_of() {
 }
 
 #[test]
-fn v2_array_of_utf8_schema_json_deserializes_unchanged() {
+fn flat_array_of_utf8_schema_json_deserializes_unchanged() {
     let json = r#"{"version":1,"columns":[{"name":"x","logical_type":{"kind":"array_of_utf8"},"encodings":[[{"id":"zstd"}],[{"id":"zstd"}],[{"id":"zstd"}]]}]}"#;
-    let schema = Schema::from_json(json.as_bytes()).expect("v2 ArrayOfUtf8 JSON should parse");
+    let schema = Schema::from_json(json.as_bytes()).expect("legacy flat ArrayOfUtf8 JSON should parse");
     assert!(matches!(
         schema.columns[0].logical_type,
         LogicalType::ArrayOfUtf8
@@ -398,9 +399,9 @@ fn v2_array_of_utf8_schema_json_deserializes_unchanged() {
 }
 
 #[test]
-fn v2_nullable_prim_schema_json_deserializes_unchanged() {
+fn flat_nullable_prim_schema_json_deserializes_unchanged() {
     let json = r#"{"version":1,"columns":[{"name":"x","logical_type":{"kind":"nullable_prim","data_type":"i32"},"encodings":[[{"id":"leb128"},{"id":"zstd"}],[{"id":"zstd"}]]}]}"#;
-    let schema = Schema::from_json(json.as_bytes()).expect("v2 NullablePrim JSON should parse");
+    let schema = Schema::from_json(json.as_bytes()).expect("legacy flat NullablePrim JSON should parse");
     assert!(matches!(
         schema.columns[0].logical_type,
         LogicalType::NullablePrim {
@@ -410,9 +411,9 @@ fn v2_nullable_prim_schema_json_deserializes_unchanged() {
 }
 
 #[test]
-fn v2_nullable_utf8_schema_json_deserializes_unchanged() {
+fn flat_nullable_utf8_schema_json_deserializes_unchanged() {
     let json = r#"{"version":1,"columns":[{"name":"x","logical_type":{"kind":"nullable_utf8"},"encodings":[[{"id":"leb128"},{"id":"zstd"}],[{"id":"zstd"}],[{"id":"zstd"}]]}]}"#;
-    let schema = Schema::from_json(json.as_bytes()).expect("v2 NullableUtf8 JSON should parse");
+    let schema = Schema::from_json(json.as_bytes()).expect("legacy flat NullableUtf8 JSON should parse");
     assert!(matches!(
         schema.columns[0].logical_type,
         LogicalType::NullableUtf8
@@ -420,9 +421,9 @@ fn v2_nullable_utf8_schema_json_deserializes_unchanged() {
 }
 
 #[test]
-fn v2_nullable_binary_schema_json_deserializes_unchanged() {
+fn flat_nullable_binary_schema_json_deserializes_unchanged() {
     let json = r#"{"version":1,"columns":[{"name":"x","logical_type":{"kind":"nullable_binary"},"encodings":[[{"id":"leb128"},{"id":"zstd"}],[{"id":"zstd"}],[{"id":"zstd"}]]}]}"#;
-    let schema = Schema::from_json(json.as_bytes()).expect("v2 NullableBinary JSON should parse");
+    let schema = Schema::from_json(json.as_bytes()).expect("legacy flat NullableBinary JSON should parse");
     assert!(matches!(
         schema.columns[0].logical_type,
         LogicalType::NullableBinary
@@ -430,14 +431,14 @@ fn v2_nullable_binary_schema_json_deserializes_unchanged() {
 }
 
 // ---------------------------------------------------------------------------
-// Combined v2 schema — production-shape mix of dict + nullable + array
+// Combined legacy flat schema — production-shape mix of dict + nullable + array
 // + utf8 + primitive
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v2_combined_production_shape_roundtrip() {
-    // Mimics a realistic pre-v3 schema that combined every v2 nullable/array/dict shape
-    // in one file. Verifies all variants survive together through the v3 reader.
+fn flat_combined_production_shape_roundtrip() {
+    // Mimics a realistic pre-recursive schema that combined every legacy flat nullable/array/dict shape
+    // in one file. Verifies all variants survive together through the recursive reader.
     let schema = Schema::new(vec![
         // Timestamps: monotonic, delta-encoded.
         ColumnSpec::primitive("ts", DataType::I64, delta_leb_zstd()),
@@ -572,23 +573,23 @@ fn v2_combined_production_shape_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// Dual-format isolation: a v2-only file and a v3-only file written
-// independently by the v3 writer must each round-trip cleanly.
+// Dual-format isolation: a flat-only file and a recursive-only file written
+// independently by the recursive writer must each round-trip cleanly.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn dual_format_v2_and_v3_files_coexist() {
+fn dual_format_flat_and_recursive_files_coexist() {
     let reg = registry();
 
-    // ---- File A: v2-only schema ----
-    let v2_schema = Schema::new(vec![ColumnSpec::nullable_prim(
+    // ---- File A: flat-only schema ----
+    let flat_schema = Schema::new(vec![ColumnSpec::nullable_prim(
         "x",
         DataType::I32,
         present_coders(),
         delta_leb_zstd(),
     )]);
     let mut buf_a = Cursor::new(Vec::<u8>::new());
-    let mut wa = HeliumWriter::new(&mut buf_a, v2_schema, &reg).expect("v2 writer");
+    let mut wa = HeliumWriter::new(&mut buf_a, flat_schema, &reg).expect("legacy flat writer");
     wa.write_column(
         "x",
         LogicalColumn::NullablePrim {
@@ -596,25 +597,25 @@ fn dual_format_v2_and_v3_files_coexist() {
             values: ColumnData::I32(vec![1, 3]),
         },
     )
-    .expect("v2 write");
-    wa.finish().expect("v2 finish");
+    .expect("legacy flat write");
+    wa.finish().expect("legacy flat finish");
 
-    // Verify the file's embedded SCHEMA JSON uses the v2 kind tag, NOT v3.
+    // Verify the file's embedded SCHEMA JSON uses the legacy flat kind tag, NOT recursive.
     // Schema bytes are zstd-compressed in the header — decompress first.
-    let v2_file_bytes = buf_a.get_ref();
-    let v2_schema_json = decompress_schema_from_self_contained_file(v2_file_bytes);
+    let flat_file_bytes = buf_a.get_ref();
+    let flat_schema_json = decompress_schema_from_self_contained_file(flat_file_bytes);
     assert!(
-        contains_subseq(&v2_schema_json, b"\"kind\":\"nullable_prim\""),
-        "v2-vocabulary schema should keep v2 kind tag; got: {}",
-        String::from_utf8_lossy(&v2_schema_json)
+        contains_subseq(&flat_schema_json, b"\"kind\":\"nullable_prim\""),
+        "flat-vocabulary schema should keep legacy flat kind tag; got: {}",
+        String::from_utf8_lossy(&flat_schema_json)
     );
     assert!(
-        !contains_subseq(&v2_schema_json, b"\"kind\":\"nullable\""),
-        "v2-vocabulary schema should NOT auto-upgrade to v3 vocabulary"
+        !contains_subseq(&flat_schema_json, b"\"kind\":\"nullable\""),
+        "flat-vocabulary schema should NOT auto-upgrade to recursive vocabulary"
     );
 
-    // ---- File B: v3-only schema (Nullable wrapper) ----
-    let v3_schema = Schema::new(vec![ColumnSpec::nullable(
+    // ---- File B: recursive-only schema (Nullable wrapper) ----
+    let recursive_schema = Schema::new(vec![ColumnSpec::nullable(
         "x",
         LogicalType::Primitive {
             data_type: DataType::I32,
@@ -622,7 +623,7 @@ fn dual_format_v2_and_v3_files_coexist() {
         vec![present_coders(), delta_leb_zstd()],
     )]);
     let mut buf_b = Cursor::new(Vec::<u8>::new());
-    let mut wb = HeliumWriter::new(&mut buf_b, v3_schema, &reg).expect("v3 writer");
+    let mut wb = HeliumWriter::new(&mut buf_b, recursive_schema, &reg).expect("recursive writer");
     wb.write_column(
         "x",
         LogicalColumn::Nullable {
@@ -630,19 +631,19 @@ fn dual_format_v2_and_v3_files_coexist() {
             value: Box::new(LogicalColumn::Primitive(ColumnData::I32(vec![1, 3]))),
         },
     )
-    .expect("v3 write");
-    wb.finish().expect("v3 finish");
+    .expect("recursive write");
+    wb.finish().expect("recursive finish");
 
-    let v3_file_bytes = buf_b.get_ref();
-    let v3_schema_json = decompress_schema_from_self_contained_file(v3_file_bytes);
+    let recursive_file_bytes = buf_b.get_ref();
+    let recursive_schema_json = decompress_schema_from_self_contained_file(recursive_file_bytes);
     assert!(
-        contains_subseq(&v3_schema_json, b"\"kind\":\"nullable\""),
-        "v3-vocabulary schema should use new kind tag; got: {}",
-        String::from_utf8_lossy(&v3_schema_json)
+        contains_subseq(&recursive_schema_json, b"\"kind\":\"nullable\""),
+        "recursive-vocabulary schema should use new kind tag; got: {}",
+        String::from_utf8_lossy(&recursive_schema_json)
     );
     assert!(
-        !contains_subseq(&v3_schema_json, b"\"kind\":\"nullable_prim\""),
-        "v3-vocabulary schema should NOT use v2 tag"
+        !contains_subseq(&recursive_schema_json, b"\"kind\":\"nullable_prim\""),
+        "recursive-vocabulary schema should NOT use legacy flat tag"
     );
 
     // ---- Read both back; assertions match the variant the schema requested ----
@@ -653,7 +654,7 @@ fn dual_format_v2_and_v3_files_coexist() {
         .unwrap();
     assert!(
         matches!(read_a, LogicalColumn::NullablePrim { .. }),
-        "v2 file → v2 variant"
+        "legacy flat file → legacy flat variant"
     );
 
     buf_b.set_position(0);
@@ -663,12 +664,12 @@ fn dual_format_v2_and_v3_files_coexist() {
         .unwrap();
     assert!(
         matches!(read_b, LogicalColumn::Nullable { .. }),
-        "v3 file → v3 variant"
+        "recursive file → recursive variant"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Carry-over from §5.5 review: 256-variant Union rejection
+// Carry-over: 256-variant Union rejection
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -730,7 +731,7 @@ fn union_accepts_255_variants() {
 fn writer_starts_with_magic_at_offset_zero() {
     // Tautological-looking, but it locks down the "no read-modify-write" path:
     // every HeliumWriter::new call writes the magic bytes at offset 0.
-    // (Current writer emits v5 magic; see PLAN_V2 §6.4 + footer-compression update.)
+    // (Current writer emits the self-contained magic with a compressed footer.)
     let schema = Schema::new(vec![ColumnSpec::primitive(
         "x",
         DataType::I32,
@@ -746,29 +747,29 @@ fn writer_starts_with_magic_at_offset_zero() {
     .expect("write");
     w.finish().expect("finish");
 
-    // First 8 bytes must be the current writer's magic (v5 = v3 + compressed footer).
+    // First 8 bytes must be the current writer's magic (version 1, self-contained flags).
     let bytes = buf.get_ref();
     assert!(bytes.len() >= 8);
     assert_eq!(&bytes[..8], b"HELIUM\x01\x00");
 }
 
 // ---------------------------------------------------------------------------
-// Spot-check: a schema with both v2 and v3 variants in different columns
+// Spot-check: a schema with both legacy flat and recursive variants in different columns
 // validates, writes, and reads. Confirms the reader's dispatch table
 // handles a heterogeneous schema (real-world incremental migration shape).
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mixed_v2_and_v3_columns_in_one_schema() {
+fn mixed_flat_and_recursive_columns_in_one_schema() {
     let schema = Schema::new(vec![
-        // v2: NullablePrim
+        // legacy flat: NullablePrim
         ColumnSpec::nullable_prim(
             "old_score",
             DataType::I32,
             present_coders(),
             delta_leb_zstd(),
         ),
-        // v3: Nullable(Primitive)
+        // recursive: Nullable(Primitive)
         ColumnSpec::nullable(
             "new_score",
             LogicalType::Primitive {
@@ -776,7 +777,7 @@ fn mixed_v2_and_v3_columns_in_one_schema() {
             },
             vec![present_coders(), delta_leb_zstd()],
         ),
-        // v3: Struct
+        // recursive: Struct
         ColumnSpec::struct_col(
             "rec",
             vec![FieldSpec::primitive("id", DataType::I64, delta_leb_zstd())],

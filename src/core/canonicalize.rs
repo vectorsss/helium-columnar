@@ -1,4 +1,4 @@
-//! Canonicalization for schema JSON, per PLAN_V2 §6.5 Surface B.
+//! Canonicalization for schema JSON.
 //!
 //! The canonical form is what BLAKE3 hashes over — it must be **bit-stable**
 //! across serde_json upgrades, struct-field reordering, and any user-side
@@ -14,8 +14,7 @@
 //!    `serde_json`).
 //!
 //! This canonicalization spec is **wire-format-frozen** — the same stability
-//! rule as coder IDs (PLAN_V2 §3 commitment 3). Changing rules invalidates
-//! every existing catalog hash.
+//! rule as coder IDs. Changing rules invalidates every existing catalog hash.
 //!
 //! The implementation deliberately avoids RFC 8785 / `json-canon` (extra dep
 //! locked-in for full real-number generality we don't need) and does NOT just
@@ -33,8 +32,8 @@ use super::schema::Schema;
 /// in memory or the `serde_json` version that produced the JSON.
 ///
 /// Used by `HeliumWriter::with_catalog_ref` to assert that the caller-supplied
-/// hash matches the schema's canonical hash, and by `helium-catalog` for
-/// content-addressed catalog filenames (PLAN_V2 §6.5).
+/// hash matches the schema's canonical hash, and by the catalog for
+/// content-addressed catalog filenames.
 pub fn schema_hash(schema: &Schema) -> Result<blake3::Hash> {
     let raw = schema.to_json()?;
     let canonical = canonicalize_json(&raw).map_err(|e| {

@@ -110,22 +110,21 @@ fn file_header(flags: u8) -> [u8; 8] {
     h
 }
 
-/// zstd compression level for the schema header bytes (v5) and the footer
-/// JSON bytes (v5/v6). Level 3 is zstd's default — payloads are small and
+/// zstd compression level for the schema header bytes and the footer
+/// JSON bytes. Level 3 is zstd's default — payloads are small and
 /// entropy is high (lots of repeated tag names), so the marginal gain at
 /// higher levels is tiny while encoding time grows. Frozen alongside the magic.
 const SCHEMA_ZSTD_LEVEL: i32 = 3;
 
-/// zstd compression level for the footer JSON bytes in v5/v6 files.
+/// zstd compression level for the footer JSON bytes.
 /// Same rationale as `SCHEMA_ZSTD_LEVEL`: small payload, high key repetition.
 const FOOTER_ZSTD_LEVEL: i32 = 3;
 
-/// Total size of the catalog-mode (v6) schema slot on disk: 32 bytes raw
-/// BLAKE3 hash plus 4 bytes CRC32C of the hash bytes (LE). Frozen by §6.5
-/// Surface F.
+/// Total size of the catalog-mode schema slot on disk: 32 bytes raw
+/// BLAKE3 hash plus 4 bytes CRC32C of the hash bytes (LE).
 pub const CATALOG_SCHEMA_SLOT_LEN: usize = 36;
 
-/// Trait-object form of the catalog (v6) schema resolver — used internally by
+/// Trait-object form of the catalog schema resolver — used internally by
 /// `HeliumReader::new_inner` to avoid type-complexity lints on
 /// `Option<&dyn Fn(...)>`.
 type SchemaResolver<'a> = &'a dyn Fn(&blake3::Hash) -> Result<Schema>;
@@ -156,7 +155,7 @@ struct PhysicalLocation {
     offset: u64,
     length: u64,
     /// CRC32C of the encoded bytes for this physical column. Always written by
-    /// v5/v6; `#[serde(default)]` keeps deserialization total if absent.
+    /// the writer; `#[serde(default)]` keeps deserialization total if absent.
     #[serde(default)]
     crc32c: u32,
     /// Minimum value for this physical column. `None` if the column was
@@ -186,8 +185,8 @@ struct PhysicalLocation {
 // Writer
 // ---------------------------------------------------------------------------
 
-/// Validate the schema's pipelines and return them. Shared between the v5 and
-/// v6 (catalog-mode) writer constructors.
+/// Validate the schema's pipelines and return them. Shared between the
+/// self-contained and catalog-mode writer constructors.
 fn resolve_and_validate_pipelines(
     schema: &Schema,
     registry: &CoderRegistry,
@@ -259,8 +258,9 @@ impl<W: Write + Seek> fmt::Debug for HeliumWriter<W> {
 }
 
 impl<W: Write + Seek> HeliumWriter<W> {
-    /// Open a writer that emits v5 magic + zstd-compressed schema JSON in the
-    /// header and zstd-compressed footer JSON (the default single-file mode).
+    /// Open a writer that emits self-contained magic + zstd-compressed schema
+    /// JSON in the header and zstd-compressed footer JSON (the default
+    /// single-file mode).
     pub fn new(mut inner: W, schema: Schema, registry: &CoderRegistry) -> Result<Self> {
         schema.validate()?;
         let pipelines = resolve_and_validate_pipelines(&schema, registry)?;
@@ -283,18 +283,18 @@ impl<W: Write + Seek> HeliumWriter<W> {
         Self::finish_init(inner, schema, pipelines, header)
     }
 
-    /// Open a writer that emits **v6 catalog-mode magic** + a 36-byte schema
+    /// Open a writer that emits **catalog-mode magic** + a 36-byte schema
     /// slot (32-byte BLAKE3 hash + 4-byte CRC32C of those bytes). The actual
     /// schema is *not* embedded; readers must resolve the hash via
     /// [`HeliumReader::new_with_resolver`] backed by a catalog directory.
     ///
-    /// Per PLAN_V2 §6.5 Surface C, this constructor takes the schema **and**
-    /// the precomputed hash separately:
+    /// This constructor takes the schema **and** the precomputed hash
+    /// separately:
     /// - `schema` is needed in-memory for column write-time validation,
     ///   `physical_fields()` decomposition, and per-leaf pipeline construction.
     /// - `schema_hash` is the on-disk identity — the writer embeds it in the
-    ///   v6 schema slot. The caller is responsible for computing the hash via
-    ///   the canonicalizer in `helium-catalog`. helium-core does not depend
+    ///   catalog-mode schema slot. The caller is responsible for computing the
+    ///   hash via the catalog canonicalizer. helium-core does not depend
     ///   on the canonicalizer to keep the format-only surface clean.
     ///
     /// Convenience: use `helium_catalog::Catalog::open_writer(file, schema, registry)`
@@ -310,8 +310,8 @@ impl<W: Write + Seek> HeliumWriter<W> {
     ) -> Result<Self> {
         schema.validate()?;
 
-        // §6.5 Surface C lock: assert the caller-supplied hash matches the
-        // schema's canonical hash. Catches the most likely caller bug —
+        // Assert the caller-supplied hash matches the schema's canonical hash.
+        // Catches the most likely caller bug —
         // passing a hash for the wrong schema, which would silently produce a
         // .he file that resolves to the wrong schema in the catalog.
         let expected_hash = super::canonicalize::schema_hash(&schema)?;
@@ -566,7 +566,7 @@ impl<W: Write + Seek> HeliumWriter<W> {
             stripes: std::mem::take(&mut self.stripes),
         };
         let footer_json = serde_json::to_vec(&footer)?;
-        // Both writer outputs (v5, v6) zstd-compress the footer JSON. The CRC
+        // Both writer outputs zstd-compress the footer JSON. The CRC
         // is over the compressed bytes so corruption is detected before
         // decompression (mirrors the schema header).
         let footer_bytes = zstd::encode_all(&footer_json[..], FOOTER_ZSTD_LEVEL)
@@ -731,7 +731,7 @@ impl<R: Read + Seek> HeliumReader<R> {
         let pipelines = schema.resolve_all(registry)?;
 
         let file_len = inner.seek(SeekFrom::End(0))?;
-        // v5/v6 share a 20-byte trailer: footer_len(8) + footer_crc32c(4) + magic(8).
+        // The trailer is 20 bytes: footer_len(8) + footer_crc32c(4) + magic(8).
         let trailer_len: u64 = 20;
         if file_len < body_start + trailer_len {
             return Err(HeliumError::Format("file truncated: no footer".into()));
@@ -771,7 +771,7 @@ impl<R: Read + Seek> HeliumReader<R> {
                 ),
             });
         }
-        // v5/v6: zstd-decompress the footer before parsing JSON.
+        // zstd-decompress the footer before parsing JSON.
         let footer_json: Vec<u8> = zstd::decode_all(&footer_bytes[..])
             .map_err(|e| HeliumError::Format(format!("zstd decompress footer: {e}")))?;
         let footer: Footer = serde_json::from_slice(&footer_json)?;
@@ -848,7 +848,7 @@ impl<R: Read + Seek> HeliumReader<R> {
     /// if `stripe_idx` is out of range or `column_name` is not in the
     /// schema.
     ///
-    /// All fields inside a [`PhysicalColumnStats`] are `None` for v5/v6 files
+    /// All fields inside a [`PhysicalColumnStats`] are `None` for files
     /// written without stats.
     pub fn stripe_column_stats(
         &self,
@@ -937,7 +937,7 @@ impl<R: Read + Seek> HeliumReader<R> {
     /// These numbers are derived from metadata cached at open time — no extra
     /// I/O is required.
     pub fn region_sizes(&self) -> (u64, u64, u64) {
-        // v5/v6 share a 20-byte trailer: footer_len(8) + footer_crc32c(4) + magic(8).
+        // The trailer is 20 bytes: footer_len(8) + footer_crc32c(4) + magic(8).
         let trailer_len: u64 = 20;
         let footer_region = self.footer_len + trailer_len;
         let body_bytes = self
@@ -1023,7 +1023,7 @@ impl<R: Read + Seek> HeliumReader<R> {
     /// Project a subset of columns into a new `.he` file (a column "slice").
     ///
     /// Writes `columns` (in the given order) to `dst` as a fresh self-contained
-    /// (v5) file whose schema is [`Schema::project`]ed to exactly those columns,
+    /// file whose schema is [`Schema::project`]ed to exactly those columns,
     /// preserving each column's encodings and the source's stripe boundaries.
     /// Returns the `dst` sink (like [`HeliumWriter::finish`]).
     ///
@@ -1241,8 +1241,8 @@ impl<R: Read + Seek> HeliumReader<R> {
         let column_name = spec.name.clone();
 
         // Leaf-path names (dotted) for richer error context on CRC / decode
-        // failures inside a deeply-nested type (§5.8 requirement: failures
-        // must pinpoint the failing leaf).
+        // failures inside a deeply-nested type: failures must pinpoint the
+        // failing leaf.
         let physical_field_names = spec.logical_type.physical_fields();
 
         let mut physical_parts = Vec::with_capacity(locs.len());
@@ -1263,7 +1263,7 @@ impl<R: Read + Seek> HeliumReader<R> {
                         field.role
                     ),
                 })?;
-            // v5/v6 always carry a per-leaf CRC32C.
+            // Files always carry a per-leaf CRC32C.
             let actual = crc32c::crc32c(&bytes);
             if actual != loc.crc32c {
                 return Err(HeliumError::Corrupted {

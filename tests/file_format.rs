@@ -828,7 +828,7 @@ fn dict_prim_rejects_float_input() {
 }
 
 // ---------------------------------------------------------------------------
-// Format v2: multi-stripe + CRC
+// Format: multi-stripe + CRC
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1017,7 +1017,7 @@ fn multi_stripe_column_pruning_reads_only_target_bytes() {
 }
 
 #[test]
-fn v2_crc_detects_single_byte_flip() {
+fn crc_detects_single_byte_flip() {
     let schema = multi_stripe_schema();
     let registry = CoderRegistry::default();
     let mut w = HeliumWriter::new(Cursor::new(Vec::new()), schema, &registry).unwrap();
@@ -1062,7 +1062,7 @@ fn v2_crc_detects_single_byte_flip() {
 }
 
 #[test]
-fn v2_footer_crc_detects_tampering() {
+fn footer_crc_detects_tampering() {
     let schema = multi_stripe_schema();
     let registry = CoderRegistry::default();
     let mut w = HeliumWriter::new(Cursor::new(Vec::new()), schema, &registry).unwrap();

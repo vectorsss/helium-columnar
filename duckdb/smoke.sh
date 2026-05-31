@@ -301,32 +301,32 @@ else
     echo "    [SKIP] json adapter not in this build; List/Struct covered by Query 6 fixtures"
 fi
 
-# ---- 11. v6 catalog-mode support -------------------------------------------
+# ---- 11. catalog-mode support ----------------------------------------------
 echo ""
-echo "--- Query 8: v6 catalog-mode file via catalog := '<dir>' ---"
+echo "--- Query 8: catalog-mode file via catalog := '<dir>' ---"
 CAT_DIR="${TMPDIR_SMOKE}/catalog"
-V6_HE="${TMPDIR_SMOKE}/v6.he"
+CATALOG_HE="${TMPDIR_SMOKE}/catalog.he"
 mkdir -p "${CAT_DIR}"
-if "${HELIUM_CLI}" convert "${CSV_FILE}" -o "${V6_HE}" --catalog "${CAT_DIR}" 2>/dev/null; then
-    # Without the catalog parameter, a v6 file must error clearly.
-    V6_ERR="$(duckdb -unsigned :memory: -c "LOAD '${EXT}'; SELECT count(*) FROM read_he('${V6_HE}');" 2>&1 || true)"
-    if echo "${V6_ERR}" | grep -q "schema resolver"; then
-        echo "    [PASS] v6 without catalog errors with a clear message"
+if "${HELIUM_CLI}" convert "${CSV_FILE}" -o "${CATALOG_HE}" --catalog "${CAT_DIR}" 2>/dev/null; then
+    # Without the catalog parameter, a catalog-mode file must error clearly.
+    CATALOG_ERR="$(duckdb -unsigned :memory: -c "LOAD '${EXT}'; SELECT count(*) FROM read_he('${CATALOG_HE}');" 2>&1 || true)"
+    if echo "${CATALOG_ERR}" | grep -q "schema resolver"; then
+        echo "    [PASS] catalog file without resolver errors with a clear message"
     else
-        echo "    [FAIL] expected resolver error, got: ${V6_ERR}"
+        echo "    [FAIL] expected resolver error, got: ${CATALOG_ERR}"
         exit 1
     fi
     # With the catalog directory, it reads.
-    V6_OUT="$(duckdb -unsigned :memory: << SQL
+    CATALOG_OUT="$(duckdb -unsigned :memory: << SQL
 LOAD '${EXT}';
-SELECT count(*) AS total FROM read_he('${V6_HE}', catalog := '${CAT_DIR}');
+SELECT count(*) AS total FROM read_he('${CATALOG_HE}', catalog := '${CAT_DIR}');
 SQL
 )"
-    echo "${V6_OUT}"
-    if echo "${V6_OUT}" | grep -q "100"; then
-        echo "    [PASS] v6 file read via catalog := parameter"
+    echo "${CATALOG_OUT}"
+    if echo "${CATALOG_OUT}" | grep -q "100"; then
+        echo "    [PASS] catalog file read via catalog := parameter"
     else
-        echo "    [FAIL] v6 catalog read returned wrong count"
+        echo "    [FAIL] catalog read returned wrong count"
         exit 1
     fi
 else

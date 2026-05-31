@@ -39,7 +39,7 @@ fn lt_err(avsc: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: Avro primitives
+// Avro primitives
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -103,7 +103,7 @@ fn string_to_utf8() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: Avro logical types
+// Avro logical types
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -206,7 +206,7 @@ fn uuid_string_to_binary() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: Avro array → List
+// Avro array → List
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -243,7 +243,7 @@ fn nested_array_to_list_of_list() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: Avro map → Map<Utf8, V>
+// Avro map → Map<Utf8, V>
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -280,13 +280,13 @@ fn map_key_is_always_utf8() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: Avro enum → Dictionary{inner:Utf8}
+// Avro enum → Dictionary{inner:Utf8}
 // ---------------------------------------------------------------------------
 
 #[test]
 fn enum_to_dict_utf8() {
     let avsc = r#"{"type": "enum", "name": "Status", "symbols": ["PENDING", "DONE", "FAILED"]}"#;
-    // Avro enums now produce the v3 Dictionary{inner:Utf8} type.
+    // Avro enums now produce the recursive Dictionary{inner:Utf8} type.
     assert_eq!(
         lt(avsc),
         LogicalType::Dictionary {
@@ -317,7 +317,7 @@ fn enum_via_named_reference() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: Avro fixed → Binary
+// Avro fixed → Binary
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -347,7 +347,7 @@ fn fixed_no_precision_to_binary() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: Union → Nullable / Union
+// Union → Nullable / Union
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -470,7 +470,7 @@ fn union_variant_name_from_array_type() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: Avro record → Struct
+// Avro record → Struct
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -556,7 +556,7 @@ fn nested_records_become_nested_struct() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: Schema validates cleanly (encoding count check)
+// Schema validates cleanly (encoding count check)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -581,7 +581,7 @@ fn produced_schema_passes_validate() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: MR-shape schema #1 — Server log record
+// MR-shape schema #1 — Server log record
 // ---------------------------------------------------------------------------
 
 /// Representative MR (map-reduce) data shape: server access log.
@@ -643,7 +643,7 @@ fn mr_schema_1_server_log() {
         "timestamp must be Datetime(Millis)"
     );
 
-    // level: enum → Dictionary{inner:Utf8} (v3 type)
+    // level: enum → Dictionary{inner:Utf8} (recursive type)
     let level = schema.column("level").expect("level");
     assert_eq!(
         level.logical_type,
@@ -686,7 +686,7 @@ fn mr_schema_1_server_log() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: MR-shape schema #2 — Transaction event
+// MR-shape schema #2 — Transaction event
 // ---------------------------------------------------------------------------
 
 /// Representative MR data shape: financial transaction event.
@@ -761,7 +761,7 @@ fn mr_schema_2_transaction_event() {
 }
 
 // ---------------------------------------------------------------------------
-// §5.7: MR-shape schema #3 — Sensor reading
+// MR-shape schema #3 — Sensor reading
 // ---------------------------------------------------------------------------
 
 /// Representative MR data shape: IoT sensor reading stream.

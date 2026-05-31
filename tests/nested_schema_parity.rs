@@ -1,11 +1,11 @@
-//! v3 Wider-Corpus Parity Report (bencher task).
+//! Nested-schema parity report (bencher task).
 //!
-//! Measures recursive v3 schema vs flat v2 schema compressed byte sizes across
-//! 4 workload shapes. Every shape is round-trip verified (write → read → assert
-//! value equality) before bytes are counted.
+//! Measures recursive (Struct/List/Map) schema vs flat schema compressed byte
+//! sizes across 4 workload shapes. Every shape is round-trip verified
+//! (write → read → assert value equality) before bytes are counted.
 //!
 //! Run:
-//!   cargo test --test v3_parity_corpus --release -- --nocapture
+//!   cargo test --test nested_schema_parity --release -- --nocapture
 
 use std::io::Cursor;
 
@@ -250,7 +250,7 @@ fn write_recursive_log(d: &LogData) -> Vec<u8> {
 //   tx_parent_id      → present(U8) + offsets(U32) + data(Bytes)  [NullableUtf8]
 //   tx_metadata       → outer_offsets(U32) + inner_offsets(U32) + data(Bytes) [ArrayOfUtf8]
 //
-// Recursive v3 (same 12 leaf physical fields, different role-name prefixes):
+// Recursive (same 12 leaf physical fields, different role-name prefixes):
 //   tx.id             → offsets + data
 //   tx.amount         → offsets + data
 //   tx.currency       → offsets + data
@@ -433,20 +433,20 @@ fn write_recursive_tx(d: &TxData) -> Vec<u8> {
 // Schema:  Struct { device_id: Utf8,
 //                   readings: List<Struct { key: Utf8, value: F64 }> }
 //
-// Key parity insight: v3 List<Struct { k, v }> stores ONE shared outer-offsets
-// array covering both key and value fields.  The v2 flat equivalent must use
+// Key parity insight: Recursive List<Struct { k, v }> stores ONE shared outer-offsets
+// array covering both key and value fields.  The flat equivalent must use
 // ArrayOfUtf8 + ArrayOf(F64), each of which carries its own outer-offsets
-// column — so v2 duplicates the outer offsets.  Expected result: v3 is
+// column — so the flat form duplicates the outer offsets.  Expected result: recursive is
 // strictly smaller (negative overhead), which trivially passes the 5% gate.
 //
-// Flat v2 physical (7 leaf physical fields):
+// Flat physical (7 leaf physical fields):
 //   sr_device_id      → offsets(U32) + data(Bytes)                 [Utf8]
 //   sr_reading_key    → outer_offsets(U32) + inner_offsets(U32) +
 //                        data(Bytes)                               [ArrayOfUtf8]
 //   sr_reading_value  → outer_offsets(U32) + values(F64)           [ArrayOf(F64)]
 //                        ↑ duplicates the outer_offsets above
 //
-// v3 recursive physical (6 leaf physical fields):
+// recursive physical (6 leaf physical fields):
 //   sensors.device_id.offsets / data
 //   sensors.readings.offsets               ← one shared outer-offsets
 //   sensors.readings.item.key.offsets / data
@@ -503,8 +503,8 @@ fn make_sensor_data(n_rows: usize, readings_per_row: usize) -> SensorData {
     }
 }
 
-/// Flat v2: two Array columns (ArrayOfUtf8 + ArrayOf(F64)) each carrying their
-/// own outer-offsets — the structural duplication that v3 avoids.
+/// Flat: two Array columns (ArrayOfUtf8 + ArrayOf(F64)) each carrying their
+/// own outer-offsets — the structural duplication that the recursive form avoids.
 fn flat_sensor_schema() -> Schema {
     Schema::new(vec![
         ColumnSpec::utf8("sr_device_id", delta_leb_zstd(), zstd_only()),
@@ -525,7 +525,7 @@ fn flat_sensor_schema() -> Schema {
     ])
 }
 
-/// Recursive v3: List<Struct> shares one outer-offsets across both inner fields.
+/// Recursive: List<Struct> shares one outer-offsets across both inner fields.
 fn recursive_sensor_schema() -> Schema {
     let inner_struct = LogicalType::Struct {
         fields: vec![
@@ -608,8 +608,8 @@ fn write_recursive_sensor(d: &SensorData) -> Vec<u8> {
 // Pure-string shape: most columns are Utf8 with varied cardinality, plus
 // one list-of-strings field. Tests the Dict/Utf8 encoding paths at scale.
 //
-// Flat v2: 6 top-level columns
-// Recursive v3: same 6 fields inside a single Struct
+// Flat: 6 top-level columns
+// Recursive: same 6 fields inside a single Struct
 // ---------------------------------------------------------------------------
 
 struct MrData {
@@ -978,7 +978,7 @@ fn verify_mr_roundtrip(flat: &[u8], rec: &[u8], n: usize) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v3_parity_wider_corpus() {
+fn recursive_parity_wider_corpus() {
     let mut results: Vec<ParityResult> = Vec::new();
 
     // ------ Shape 1a: Server Log 10k ------
@@ -1058,7 +1058,7 @@ fn v3_parity_wider_corpus() {
     }
 
     // ------ Print markdown table ------
-    println!("\n## v3 Recursive vs Flat v2 Parity Results\n");
+    println!("\n## Recursive vs Flat Parity Results\n");
     println!("| Shape | Rows | Flat (bytes) | Recursive (bytes) | Overhead | 5% headroom factor |");
     println!(
         "|-------|------|--------------|-------------------|----------|---------------------|"

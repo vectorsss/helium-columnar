@@ -3,7 +3,7 @@
 //! Each test verifies one aspect of the `ContainmentFilter` infrastructure:
 //! round-trip serialisation, stripe pruning via `DistinctSet` and `Bloom`,
 //! IN-list predicates, false-negative safety, `with_filters_disabled`, mixed
-//! predicates, numeric equality, and catalog v6 compatibility.
+//! predicates, numeric equality, and catalog-mode compatibility.
 //!
 //! All tests are gated on the `datafusion` feature.
 
@@ -642,12 +642,12 @@ fn registry_default() -> CoderRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// Test 10 — Catalog v6 round-trip
+// Test 10 — Catalog-mode round-trip
 // ---------------------------------------------------------------------------
 
-/// Same equality query against a catalog-mode (v6) file.
+/// Same equality query against a catalog-mode file.
 #[test]
-fn filter_t10_catalog_v6_roundtrip() {
+fn filter_t10_catalog_roundtrip() {
     use helium::catalog::Catalog;
 
     let dir = tempfile::tempdir().expect("tempdir");

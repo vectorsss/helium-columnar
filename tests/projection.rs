@@ -341,12 +341,12 @@ fn project_preserves_source_stats() {
 }
 
 // ---------------------------------------------------------------------------
-// Cross-version: slicing a v6 (catalog-mode) source produces a self-contained
-// v5 output (raw byte copy is version-independent).
+// Cross-mode: slicing a catalog-mode source produces a self-contained
+// output (raw byte copy is mode-independent).
 // ---------------------------------------------------------------------------
 
 #[test]
-fn project_from_v6_catalog_source() {
+fn project_from_catalog_source() {
     use helium::catalog::Catalog;
 
     let n = 80;
@@ -354,7 +354,7 @@ fn project_from_v6_catalog_source() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = Catalog::open(dir.path()).unwrap();
 
-    // Write a v6 catalog-mode source with two columns.
+    // Write a catalog-mode source with two columns.
     let schema = Schema::new(vec![
         ColumnSpec::primitive("ts", DataType::I64, i64_pipe()),
         ColumnSpec::new(
@@ -376,7 +376,7 @@ fn project_from_v6_catalog_source() {
     w.write_column("label", s.clone()).unwrap();
     w.finish().unwrap();
 
-    // Open via resolver and slice "label" → a self-contained v5 file.
+    // Open via resolver and slice "label" → a self-contained file.
     let bytes = buf.into_inner();
     let mut reader =
         HeliumReader::new_with_resolver(Cursor::new(bytes), &registry(), catalog.resolver())
@@ -386,9 +386,9 @@ fn project_from_v6_catalog_source() {
         .project_to(&["label"], Cursor::new(&mut out), &registry())
         .unwrap();
 
-    // Output is plain v5 — readable WITHOUT a resolver.
+    // Output is plain self-contained — readable WITHOUT a resolver.
     let mut r2 = HeliumReader::new(Cursor::new(out), &registry()).unwrap();
-    assert_eq!(r2.version_str(), "v5");
+    assert_eq!(r2.version_str(), "v1");
     assert_eq!(r2.read_column("label").unwrap(), s);
 }
 

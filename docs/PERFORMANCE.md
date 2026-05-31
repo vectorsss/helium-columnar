@@ -2,7 +2,7 @@
 
 Numbers measured on the `helium-columnar` **v0.1.0** release. Methodology + reproduction commands below each table — paste them at your shell, get matching results within ±10% on similar hardware.
 
-> **TL;DR**: helium's compression edge comes from the **optimizer**, not the default schema. Across **all 11 DoNext 5G/4G telemetry files**, helium-optimized beats the `Avro+zstd` 5G storage anchor on **every one** (+21% … +50%) and `csv.zst` on **10 of 11** (+3% … +64%, median ~+22%; the lone loss is a low-cardinality neighbor table at −3%); helium-*default* roughly ties or loses to both. See §1.5 for the full per-file matrix.
+> **TL;DR**: helium's compression edge comes from the **optimizer**, not the default schema. Across **all 11 DoNext 5G/4G telemetry files**, helium-optimized beats the `Avro+zstd` 5G storage anchor on **every one** (+21% … +50%) and `csv.zst` on **10 of 11** (+3% … +64%, median ~+22%; the lone loss is a low-cardinality neighbor table at −3%); helium-*default* roughly ties or loses to both. See the real-data benchmark section for the full per-file matrix.
 
 ## Test environment
 
@@ -48,18 +48,18 @@ HELIUM_REPORT_MAX_ROWS=100000 HELIUM_PARQUET_PATH=hits_1.parquet \
 
 | Format / Configuration | bytes | vs csv | vs parquet/snappy |
 |---|---:|---:|---:|
-| **helium-v6 optimized** | **7.46 MB** | 11.8 × | **1.57 ×** |
+| **helium catalog-mode optimized** | **7.46 MB** | 11.8 × | **1.57 ×** |
 | pure zstd (raw concatenated bytes) | 7.56 MB | 11.6 × | 1.55 × |
-| helium-v5 default | 8.65 MB | 10.2 × | 1.36 × |
+| helium self-contained default | 8.65 MB | 10.2 × | 1.36 × |
 | parquet (zstd) | 8.93 MB | 9.9 × | 1.31 × |
-| helium-v6 optimized (10k-row stripes) | 8.98 MB | 9.8 × | 1.31 × |
-| helium-v6 default (10k-row stripes) | 10.08 MB | 8.7 × | 1.16 × |
-| helium-v6 optimized (lz4 terminal) | 10.86 MB | 8.1 × | 1.08 × |
+| helium catalog-mode optimized (10k-row stripes) | 8.98 MB | 9.8 × | 1.31 × |
+| helium catalog-mode default (10k-row stripes) | 10.08 MB | 8.7 × | 1.16 × |
+| helium catalog-mode optimized (lz4 terminal) | 10.86 MB | 8.1 × | 1.08 × |
 | pure lz4 (raw concatenated bytes) | 11.32 MB | 7.8 × | 1.04 × |
 | parquet (lz4_raw) | 11.34 MB | 7.7 × | 1.03 × |
 | parquet (snappy, default) | 11.73 MB | 7.5 × | 1.00 × |
 | csv.zst | 12.23 MB | 7.2 × | 0.96 × |
-| helium-v6 default (lz4 terminal) | 12.02 MB | 7.3 × | 0.98 × |
+| helium catalog-mode default (lz4 terminal) | 12.02 MB | 7.3 × | 0.98 × |
 | ndjson.zst | 13.71 MB | 6.4 × | 0.86 × |
 | avro (deflate) | 14.62 MB | 6.0 × | 0.80 × |
 | csv (raw) | 87.91 MB | 1.00 × | 0.13 × |
@@ -67,22 +67,22 @@ HELIUM_REPORT_MAX_ROWS=100000 HELIUM_PARQUET_PATH=hits_1.parquet \
 
 Headline takeaways:
 
-- **Helium-v6 optimized vs parquet+zstd**: 7.46 MB vs 8.93 MB — **16.5% smaller**. This is the real headline number; earlier "1% gap" was measured at 10 k rows where Helium's pipelines hadn't broken even on framing cost yet.
-- **Helium-v6 optimized beats pure-zstd by 1.3 %** at 100 k rows. The columnar shaping (delta + leb128 / gorilla / dict / pcodec) pulls ahead once there's enough data per column for the pipelines to amortize their per-column framing.
-- **Helium-v5 *default* still loses to pure-zstd** (-14.4 %) — the optimizer's coder selection is doing real work, not just scheduling. Default schema is good for "I just want a binary format that works"; pay attention to `optimize-schema` for any workload that's compression-sensitive.
+- **Helium catalog-mode optimized vs parquet+zstd**: 7.46 MB vs 8.93 MB — **16.5% smaller**. This is the real headline number; earlier "1% gap" was measured at 10 k rows where Helium's pipelines hadn't broken even on framing cost yet.
+- **Helium catalog-mode optimized beats pure-zstd by 1.3 %** at 100 k rows. The columnar shaping (delta + leb128 / gorilla / dict / pcodec) pulls ahead once there's enough data per column for the pipelines to amortize their per-column framing.
+- **Helium self-contained *default* still loses to pure-zstd** (-14.4 %) — the optimizer's coder selection is doing real work, not just scheduling. Default schema is good for "I just want a binary format that works"; pay attention to `optimize-schema` for any workload that's compression-sensitive.
 - **Terminal zstd vs lz4 on the same pipeline**: lz4 39 % larger on default schema. Picking `lz4_terminal` is essentially "I want fast decompression, accept the size cost".
 - **`LZ4_RAW` is the right Parquet lz4 variant**: pure-lz4 (11.32 MB) and parquet/lz4_raw (11.34 MB) within 0.2 %.
-- **Multi-stripe overhead at 100 k rows / 10 stripes**: helium-v6 optimized goes 7.46 MB → 8.98 MB (+20.4 %) — bigger than the 10 k case (+5 %) because we now have 10 stripes' worth of footer entries. The trade is real: choose single-stripe for cold storage, multi-stripe when SQL pruning matters at query time.
+- **Multi-stripe overhead at 100 k rows / 10 stripes**: helium catalog-mode optimized goes 7.46 MB → 8.98 MB (+20.4 %) — bigger than the 10 k case (+5 %) because we now have 10 stripes' worth of footer entries. The trade is real: choose single-stripe for cold storage, multi-stripe when SQL pruning matters at query time.
 
 ### At 10 k rows × 105 flat columns (small-data artifact, NOT representative)
 
 | Format | bytes | vs parquet/snappy |
 |---|---:|---:|
-| **helium-v6 optimized** | 922 KB | 1.31 × |
+| **helium catalog-mode optimized** | 922 KB | 1.31 × |
 | parquet (zstd) | 931 KB | 1.30 × |
 | pure zstd (raw bytes) | 806 KB | 1.50 × |
 
-At 10 k rows, helium-v6 optimized is essentially tied with parquet+zstd (within 1 %), and pure-zstd-on-raw-bytes actually beats both. **Don't use 10 k row numbers as a proxy for production scale** — they understate Helium's compression by ~15 %.
+At 10 k rows, helium catalog-mode optimized is essentially tied with parquet+zstd (within 1 %), and pure-zstd-on-raw-bytes actually beats both. **Don't use 10 k row numbers as a proxy for production scale** — they understate Helium's compression by ~15 %.
 
 The reason: each stripe carries fixed footer overhead (per-physical-column entry × 105 cols ≈ 25 KB/stripe). At 10 k rows that's ~25 KB / 1 MB ≈ 2-3 % overhead; at 100 k rows it's ~25 KB / 10 MB ≈ 0.25 % — almost free. And the pipeline shaping (delta, leb128) needs enough redundancy in the data stream for zstd to extract real value.
 
@@ -246,7 +246,7 @@ Numbers in this file are from the `helium-columnar` v0.1.0 release. To rebuild
 the full picture:
 
 ```bash
-# 0. Real-data DoNext benchmark (§1.5) — after downloading the dataset:
+# 0. Real-data DoNext benchmark — after downloading the dataset:
 scripts/donext_benchmark_all.sh /path/to/DoNext 100000      # full per-file matrix
 scripts/donext_benchmark.sh /path/to/DoNext/H-Bahn/cell_data.csv 100000 ';'  # single file
 
