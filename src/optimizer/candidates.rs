@@ -40,8 +40,12 @@ impl LeafCandidate {
 /// cardinality / range checks.
 ///
 /// `terminal` must be one of `"zstd"`, `"lz4"`, `"snappy"`.
-pub fn structural_candidates(role: &str, data: &ColumnData, terminal: &str) -> Vec<LeafCandidate> {
-    let tc = || CoderSpec::new(terminal);
+pub fn structural_candidates(
+    role: &str,
+    data: &ColumnData,
+    terminal: &CoderSpec,
+) -> Vec<LeafCandidate> {
+    let tc = || terminal.clone();
 
     match role {
         // -----------------------------------------------------------------------
@@ -135,7 +139,7 @@ pub fn structural_candidates(role: &str, data: &ColumnData, terminal: &str) -> V
 ///
 /// `data` determines both which pipeline shapes are valid and — for I32/I64 —
 /// whether non-negative fast-paths (`deltamin`) apply.
-pub fn data_candidates(data: &ColumnData, terminal: &str) -> Vec<LeafCandidate> {
+pub fn data_candidates(data: &ColumnData, terminal: &CoderSpec) -> Vec<LeafCandidate> {
     data_candidates_for(data, terminal)
 }
 
@@ -143,8 +147,8 @@ pub fn data_candidates(data: &ColumnData, terminal: &str) -> Vec<LeafCandidate> 
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-fn data_candidates_for(data: &ColumnData, terminal: &str) -> Vec<LeafCandidate> {
-    let tc = || CoderSpec::new(terminal);
+fn data_candidates_for(data: &ColumnData, terminal: &CoderSpec) -> Vec<LeafCandidate> {
+    let tc = || terminal.clone();
 
     match data {
         ColumnData::I32(v) => {
@@ -299,19 +303,15 @@ fn data_candidates_for(data: &ColumnData, terminal: &str) -> Vec<LeafCandidate> 
 }
 
 /// Candidates for a raw `Bytes` leaf (string data, binary data).
-fn bytes_candidates(terminal: &str) -> Vec<LeafCandidate> {
-    let mut out = vec![LeafCandidate::new(
-        format!("bytes:{terminal}"),
-        vec![CoderSpec::new(terminal)],
-    )];
-    // For zstd, also try a higher compression level
-    if terminal == "zstd" {
-        out.push(LeafCandidate::new(
-            "bytes:zstd(L6)",
-            vec![CoderSpec::new("zstd").with_param("level", 6)],
-        ));
-    }
-    out
+///
+/// The terminal compressor (and its level) is a global setting on the
+/// optimizer config — it is not searched per-leaf, so there is a single
+/// candidate here.
+fn bytes_candidates(terminal: &CoderSpec) -> Vec<LeafCandidate> {
+    vec![LeafCandidate::new(
+        format!("bytes:{}", terminal.id),
+        vec![terminal.clone()],
+    )]
 }
 
 fn is_monotonic_u32(v: &[u32]) -> bool {

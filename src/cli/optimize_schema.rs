@@ -20,6 +20,7 @@ pub fn run(
     out_path: Option<&Path>,
     delimiter: u8,
     sample_rows: usize,
+    zstd_level: Option<i32>,
 ) -> anyhow::Result<()> {
     // The optimizer uses the inferred schema as the structural skeleton and
     // replaces only the encoding pipelines.
@@ -36,9 +37,11 @@ pub fn run(
         anyhow::bail!("no columns found in '{}'", input.display());
     }
 
-    let schema = Optimizer::new()
-        .optimize(data)
-        .context("running optimizer")?;
+    let mut optimizer = Optimizer::new();
+    if let Some(level) = zstd_level {
+        optimizer = optimizer.with_zstd_level(level);
+    }
+    let schema = optimizer.optimize(data).context("running optimizer")?;
 
     let json = serde_json::to_string_pretty(&schema).context("serialising schema to JSON")?;
 

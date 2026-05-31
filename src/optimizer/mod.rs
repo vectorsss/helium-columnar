@@ -37,7 +37,7 @@ pub mod candidates;
 pub mod picker;
 pub mod recursive;
 
-use crate::{CoderRegistry, ColumnSpec, LogicalColumn, LogicalType, Result, Schema};
+use crate::{CoderRegistry, CoderSpec, ColumnSpec, LogicalColumn, LogicalType, Result, Schema};
 
 pub use candidates::{LeafCandidate, data_candidates, structural_candidates};
 pub use picker::{measure_pipeline, pick_best_leaf};
@@ -90,12 +90,19 @@ pub struct OptimizerConfig {
     /// Terminal block compressor (`"zstd"`, `"lz4"`, or `"snappy"`).
     /// Default: `"zstd"`.
     pub terminal: String,
+    /// Global zstd compression level, applied to every `zstd` terminal the
+    /// optimizer emits. The level is a single global setting — it is **not**
+    /// searched per column. `None` leaves the terminal parameter-free, which
+    /// the coder reads as the zstd default (3). Ignored when `terminal` is not
+    /// `"zstd"`.
+    pub zstd_level: Option<i32>,
 }
 
 impl Default for OptimizerConfig {
     fn default() -> Self {
         Self {
             terminal: "zstd".into(),
+            zstd_level: None,
         }
     }
 }
@@ -147,6 +154,7 @@ impl Optimizer {
             registry: CoderRegistry::default(),
             config: OptimizerConfig {
                 terminal: terminal.into(),
+                ..OptimizerConfig::default()
             },
         }
     }
@@ -159,9 +167,28 @@ impl Optimizer {
         }
     }
 
+    /// Set the global zstd compression level (1–22; the zstd default is 3).
+    ///
+    /// The level is applied to every `zstd` terminal the optimizer emits; it is
+    /// a single global knob, not searched per column. No effect unless the
+    /// terminal compressor is `zstd`.
+    pub fn with_zstd_level(mut self, level: i32) -> Self {
+        self.config.zstd_level = Some(level);
+        self
+    }
+
     /// Return the current terminal coder ID.
     pub fn terminal(&self) -> &str {
         &self.config.terminal
+    }
+
+    /// Build the fully-specified terminal coder spec (id + global level).
+    fn terminal_spec(&self) -> CoderSpec {
+        let spec = CoderSpec::new(&self.config.terminal);
+        match self.config.zstd_level {
+            Some(level) if self.config.terminal == "zstd" => spec.with_param("level", level),
+            _ => spec,
+        }
     }
 
     /// Optimize encodings for a list of columns.
@@ -172,10 +199,10 @@ impl Optimizer {
     ///
     /// Returns a [`Schema`] ready for use with [`crate::HeliumWriter`].
     pub fn optimize(&self, columns: Vec<(String, LogicalType, LogicalColumn)>) -> Result<Schema> {
+        let terminal = self.terminal_spec();
         let mut specs = Vec::with_capacity(columns.len());
         for (name, lt, lc) in columns {
-            let spec =
-                recursive::optimize_column(&name, lt, lc, &self.config.terminal, &self.registry)?;
+            let spec = recursive::optimize_column(&name, lt, lc, &terminal, &self.registry)?;
             specs.push(spec);
         }
         Ok(Schema::new(specs))

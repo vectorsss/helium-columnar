@@ -154,6 +154,11 @@ enum Commands {
         /// Rows to sample when measuring encodings. 0 = whole file.
         #[arg(long, value_name = "N", default_value_t = 200_000)]
         sample_rows: usize,
+        /// Global zstd compression level for the emitted schema (1–22).
+        /// Omitted = the zstd default (3). Applies to every zstd stage; the
+        /// optimizer does not pick the level per column.
+        #[arg(long, value_name = "LEVEL")]
+        zstd_level: Option<i32>,
     },
 
     /// Compare compression ratios for different codec terminals on input data.
@@ -323,8 +328,9 @@ fn main() {
             out,
             delimiter,
             sample_rows,
+            zstd_level,
         } => parse_delimiter(&delimiter).and_then(|delim| {
-            cli::optimize_schema::run(&input, out.as_deref(), delim, sample_rows)
+            cli::optimize_schema::run(&input, out.as_deref(), delim, sample_rows, zstd_level)
         }),
         Commands::Compare {
             input,

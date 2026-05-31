@@ -82,7 +82,7 @@ pub fn pick_from_candidates(
 pub fn pick_best_structural(
     role: &str,
     data: ColumnData,
-    terminal: &str,
+    terminal: &CoderSpec,
     registry: &CoderRegistry,
     context: &str,
 ) -> Result<Vec<CoderSpec>> {
@@ -95,7 +95,7 @@ pub fn pick_best_structural(
 /// Pick the best encoding for a **data** leaf (values, dict values, raw data).
 pub fn pick_best_data(
     data: ColumnData,
-    terminal: &str,
+    terminal: &CoderSpec,
     registry: &CoderRegistry,
     context: &str,
 ) -> Result<Vec<CoderSpec>> {
@@ -113,7 +113,7 @@ pub fn pick_best_data(
 pub fn pick_best_leaf(
     role: &str,
     data: ColumnData,
-    terminal: &str,
+    terminal: &CoderSpec,
     registry: &CoderRegistry,
     context: &str,
 ) -> Result<Vec<CoderSpec>> {

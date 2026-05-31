@@ -32,7 +32,7 @@ use super::picker::pick_best_leaf;
 pub fn optimize_type(
     lt: LogicalType,
     lc: LogicalColumn,
-    terminal: &str,
+    terminal: &CoderSpec,
     registry: &CoderRegistry,
     context: &str,
 ) -> Result<(LogicalType, Vec<Vec<CoderSpec>>)> {
@@ -540,7 +540,7 @@ pub fn optimize_column(
     name: &str,
     lt: LogicalType,
     lc: LogicalColumn,
-    terminal: &str,
+    terminal: &CoderSpec,
     registry: &CoderRegistry,
 ) -> Result<ColumnSpec> {
     let (updated_lt, encodings) = optimize_type(lt, lc, terminal, registry, name)?;

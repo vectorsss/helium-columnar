@@ -351,3 +351,16 @@ def test_read_table_missing_column_raises(tmp_path):
     pyhelium.write_table(path, tab)
     with pytest.raises(ValueError):
         pyhelium.read_table(path, columns=["nope"])
+
+
+def test_zstd_level_kwarg(tmp_path):
+    # write_table accepts a global zstd_level and round-trips correctly.
+    tab = pa.table({
+        "id": pa.array(list(range(2000)), type=pa.int64()),
+        "s": pa.array([f"row-{i}" for i in range(2000)], type=pa.string()),
+    })
+    for level in (None, 1, 19):
+        path = str(tmp_path / f"lvl_{level}.he")
+        pyhelium.write_table(path, tab, zstd_level=level)
+        out = pyhelium.read_table(path)
+        assert out.equals(tab), f"round-trip mismatch at zstd_level={level}"

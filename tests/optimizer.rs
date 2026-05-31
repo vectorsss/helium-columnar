@@ -1132,3 +1132,57 @@ fn optimize_datetime_with_timezone() {
         "Datetime(UTC) round-trip mismatch"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Global zstd level (OptimizerConfig.zstd_level)
+// ---------------------------------------------------------------------------
+
+/// Collect every `zstd` CoderSpec across a column's (flattened) encodings.
+fn zstd_specs(spec: &ColumnSpec) -> Vec<&CoderSpec> {
+    spec.encodings
+        .iter()
+        .flatten()
+        .filter(|c| c.id == "zstd")
+        .collect()
+}
+
+#[test]
+fn optimize_zstd_level_default_is_parameter_free() {
+    // A Utf8 column's data leaf terminates in zstd.
+    let lt = LogicalType::Utf8;
+    let lc = LogicalColumn::Utf8((0..500).map(|i| format!("row-{i}")).collect());
+
+    let schema = Optimizer::new()
+        .optimize(vec![("s".into(), lt, lc)])
+        .unwrap();
+
+    let specs = zstd_specs(&schema.columns[0]);
+    assert!(!specs.is_empty(), "expected at least one zstd terminal");
+    for c in &specs {
+        assert!(
+            c.params.get("level").is_none(),
+            "default optimizer should leave zstd parameter-free (coder default 3)"
+        );
+    }
+}
+
+#[test]
+fn optimize_zstd_level_global_override() {
+    let lt = LogicalType::Utf8;
+    let lc = LogicalColumn::Utf8((0..500).map(|i| format!("row-{i}")).collect());
+
+    let schema = Optimizer::new()
+        .with_zstd_level(19)
+        .optimize(vec![("s".into(), lt, lc)])
+        .unwrap();
+
+    let specs = zstd_specs(&schema.columns[0]);
+    assert!(!specs.is_empty(), "expected at least one zstd terminal");
+    for c in &specs {
+        assert_eq!(
+            c.params.get("level").and_then(|v| v.as_i64()),
+            Some(19),
+            "global zstd_level must stamp every zstd terminal"
+        );
+    }
+}

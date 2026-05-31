@@ -696,6 +696,7 @@ fn build_write_schema(
     arrow_schema: &ArrowSchema,
     batches: &[RecordBatch],
     optimize: bool,
+    zstd_level: Option<i32>,
 ) -> PyResult<Schema> {
     // Default schema (logical types + default encodings) from the Arrow schema.
     let default_schema = schema_from_arrow(arrow_schema).map_err(he_err)?;
@@ -726,7 +727,10 @@ fn build_write_schema(
         sample.push((spec.name.clone(), lt, lc));
     }
 
-    let optimizer = Optimizer::new();
+    let mut optimizer = Optimizer::new();
+    if let Some(level) = zstd_level {
+        optimizer = optimizer.with_zstd_level(level);
+    }
     optimizer.optimize(sample).map_err(he_err)
 }
 
@@ -747,17 +751,23 @@ fn build_write_schema(
 ///     When set, the table is written in stripes (row groups) of at most this
 ///     many rows. Enables bounded-memory streaming for large tables and gives
 ///     readers per-stripe pruning. When unset the whole table is one stripe.
+/// zstd_level : int, optional
+///     Global zstd compression level (1–22) for the chosen pipelines. Omitted
+///     uses the zstd default (3). The level is a single global setting, not
+///     picked per column. Only takes effect when ``optimize`` is True (the
+///     default-encoding path always uses level 3).
 #[pyfunction]
-#[pyo3(signature = (path, table, optimize=true, stripe_rows=None))]
+#[pyo3(signature = (path, table, optimize=true, stripe_rows=None, zstd_level=None))]
 fn write_table(
     py: Python<'_>,
     path: &str,
     table: &Bound<'_, PyAny>,
     optimize: bool,
     stripe_rows: Option<usize>,
+    zstd_level: Option<i32>,
 ) -> PyResult<()> {
     let (arrow_schema, batches) = coerce_to_batches(py, table)?;
-    let schema = build_write_schema(&arrow_schema, &batches, optimize)?;
+    let schema = build_write_schema(&arrow_schema, &batches, optimize, zstd_level)?;
     let registry = CoderRegistry::with_builtins();
 
     let file = File::create(path).map_err(|e| PyRuntimeError::new_err(format!("{e}")))?;

@@ -5,6 +5,16 @@ on [Keep a Changelog](https://keepachangelog.com/); the project follows
 [Semantic Versioning](https://semver.org/) with the usual pre-1.0 caveat —
 **0.x minor releases may include breaking API or on-disk format changes.**
 
+## [Unreleased]
+
+### Changed
+- The optimizer no longer searches the zstd compression level per column (it
+  used to also try level 6 on byte buffers). The zstd level is now a single
+  **global** setting, defaulting to the zstd default (3). Set it via
+  `Optimizer::with_zstd_level(n)`, the new `helium optimize-schema --zstd-level N`
+  flag, or pyhelium `write_table(..., zstd_level=N)`. Omitting it leaves the
+  emitted pipelines parameter-free (level 3).
+
 ## [0.2.0] — 2026-05-30
 
 ### Changed
