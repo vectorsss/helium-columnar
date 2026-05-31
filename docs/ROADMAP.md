@@ -101,7 +101,7 @@ of that gap is now closed; what landed and what remains:
 
 **Done.** `write_table(table_or_df)` / `read_table() -> pyarrow.Table` reuse
 Helium's `arrow` bridge over the Arrow C Data Interface, lifting the old
-flat-only limit: nullable, nested (Struct / List), and semantic
+flat-only limit: nullable, nested (Struct / List / Map), and semantic
 (Date / Datetime / Decimal) columns round-trip. The original numpy API
 (`compress` / `decompress`, `write_he` / `read_he`) is unchanged. Also landed:
 
@@ -118,10 +118,6 @@ flat-only limit: nullable, nested (Struct / List), and semantic
 
 Remaining:
 
-- **Map columns** do not yet round-trip through a `.he` file — the value
-  logical type is paired with the key column variant on read. This is a
-  main-crate Map/Arrow composition gap (the `read_record_batch` tests have no
-  Map coverage), not a binding issue; the binding test is marked `xfail`.
 - **Dictionary-encoding control** — exposing dict encoding as a Python option.
 - Turning on the **PyPI publish** job once the package is registered.
 

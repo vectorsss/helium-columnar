@@ -114,13 +114,6 @@ def test_list_of_string_column(tmp_path):
     assert out.equals(tab)
 
 
-@pytest.mark.xfail(
-    reason="Map columns do not yet round-trip through a .he file: the value "
-           "logical type is paired with the key column variant on read. This is "
-           "a limitation in the main crate's Map/Arrow composition (read_record_batch "
-           "has no Map coverage), not in the binding. Struct and List nesting work.",
-    strict=True,
-)
 def test_map_column(tmp_path):
     tab = pa.table({
         "m": pa.array([[("k1", 1), ("k2", 2)], [("k3", 3)], []],
