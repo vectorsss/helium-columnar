@@ -82,12 +82,19 @@ of that gap is now closed; what landed and what remains:
   exercises the absolute-row indexing of the compacted inner values.
 - **Predicate pushdown + stripe pruning — partial (ABI-blocked).** The
   stripe-pruning logic for scalar comparisons is implemented and unit-tested
-  (`duckdb/src/prune.rs`), but the DuckDB *loadable* extension C-API (v1.2.0)
-  exposes projection pushdown and **no** filter-pushdown hook — DuckDB never
-  hands a loadable extension the `WHERE` bounds. So the machinery is ready but
-  cannot be auto-driven until the C-API gains a filter accessor (or a native /
-  DataFusion integration that does surface filters). Until then DuckDB applies
-  `WHERE` after the scan.
+  (`duckdb/src/prune.rs`), but the DuckDB *loadable* extension C-API exposes
+  projection pushdown and **no** filter-pushdown hook — DuckDB never hands a
+  loadable extension the `WHERE` bounds. So the machinery is ready but cannot be
+  auto-driven. This is a known upstream gap stuck on an unresolved filter-API
+  design (two C-API filter PRs, [duckdb#14591] / [duckdb#19093], were closed
+  unmerged); reaching it via a native C++ shim would trade away the portable
+  cross-version loadable extension. The full analysis — why the C API omits it,
+  the C++/ABI tradeoff, and the manual-range stopgap — is in
+  [`duckdb/README.md`](../duckdb/README.md) → *A note on predicate pushdown*.
+  Until the C-API catches up, DuckDB applies `WHERE` after the scan.
+
+  [duckdb#14591]: https://github.com/duckdb/duckdb/pull/14591
+  [duckdb#19093]: https://github.com/duckdb/duckdb/pull/19093
 - **Distribution — scaffolded.** `duckdb/packaging/package.sh` builds + packages
   one platform; `duckdb/packaging/matrix.md` documents the platform tuples and
   the C-API/`Cargo.lock` ABI coupling; `duckdb/ci/extension-matrix.yml` is a

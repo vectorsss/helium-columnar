@@ -34,10 +34,44 @@ caveat below) are tracked in [`docs/ROADMAP.md`](../docs/ROADMAP.md) → *Bindin
 Helium's footer carries per-stripe min/max and containment filters, and this
 crate implements the stripe-pruning logic for scalar comparisons
 (`src/prune.rs`, unit-tested). It is **not auto-driven** today: DuckDB's
-*loadable* extension C-API (v1.2.0) exposes projection pushdown but **no
-filter-pushdown hook**, so DuckDB never hands the extension the `WHERE` bounds.
-Until the C-API gains a filter accessor, DuckDB applies `WHERE` after the scan;
-the pruning machinery is ready for the moment it does.
+*loadable* extension C-API exposes projection pushdown but **no filter-pushdown
+hook**, so DuckDB never hands the extension the `WHERE` bounds. Until the C-API
+gains a filter accessor, DuckDB applies `WHERE` after the scan; the pruning
+machinery is ready for the moment it does.
+
+This is a deliberate upstream gap, not an oversight — and it is unlikely to
+change soon. DuckDB's *C++* `TableFunction` API has full filter pushdown
+(`filter_pushdown`, `TableFilterSet`, `pushdown_complex_filter`), which the
+in-tree parquet/arrow readers use. The *C* extension API does not surface it
+(verified against DuckDB `main`, not just the pinned C-API version: the only
+pushdown symbol is `duckdb_table_function_supports_projection_pushdown`, and the
+init/bind info exposes no filter accessor). The reason is structural: projection
+pushdown is a flat list of column indices, trivial to expose stably in C, while
+a filter set is a recursive tree of ~13 polymorphic node types (constant,
+conjunction, IN, IS [NOT] NULL, expression, dynamic, bloom, …) that is itself
+mid-refactor toward a unified expression representation. Two upstream PRs that
+added a C filter API ([duckdb#14591], [duckdb#19093]) were both closed without
+merging, stalled on the same unresolved design question — whether to mirror the
+C++ `TableFilter` hierarchy or expose filters as generic `duckdb_expression`s —
+plus the all-or-nothing contract that a function opting into filter pushdown
+must handle every filter type.
+
+A native **C++** shim *can* reach the full pushdown API (and a Rust crate can
+now compile one more easily, since `libduckdb-sys` exposes the DuckDB headers
+via `DEP_DUCKDB_INCLUDE`, [duckdb-rs#753]). That path is not taken here on
+purpose: building against the C++ API makes the extension a version-locked C++
+ABI artifact (`ExtensionABIType::CPP`, "version needs to match precisely")
+rather than a portable loadable `.duckdb_extension` that works across DuckDB
+versions — which is the whole reason this extension targets the stable C API.
+The pragmatic near-term alternative, if stripe pruning is needed before the
+C-API catches up, is an explicit user-supplied range parameter on `read_he`
+that feeds `prune.rs` directly; it is a manual stopgap (the caller must keep the
+range consistent with the `WHERE` clause) and is intentionally not implemented
+yet.
+
+[duckdb#14591]: https://github.com/duckdb/duckdb/pull/14591
+[duckdb#19093]: https://github.com/duckdb/duckdb/pull/19093
+[duckdb-rs#753]: https://github.com/duckdb/duckdb-rs/pull/753
 
 ## Prerequisites
 
