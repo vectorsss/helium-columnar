@@ -258,3 +258,6 @@ plan_backup
 
 # Local reference checkouts (not part of the crate)
 _refs/
+
+# Stray report/optimizer artifacts written to the repo root by some tests
+cell_data_best.json

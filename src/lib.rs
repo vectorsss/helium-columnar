@@ -82,8 +82,8 @@ pub use coders::{
 pub use core::{
     AccessPattern, BlockCoder, CATALOG_SCHEMA_SLOT_LEN, CURRENT_SCHEMA_VERSION, Coder, CoderKind,
     CoderRegistry, CoderSpec, ColumnData, ColumnSpec, ContainmentFilter, DataType, DateUnit,
-    FieldSpec, HeliumError, HeliumReader, HeliumWriter, LogicalColumn, LogicalType, MAGIC,
-    MAGIC_V5, MAGIC_V6, MAX_NESTED_DEPTH, MinMaxValue, NonBlockCoder, PhysicalColumnStats,
+    FORMAT_VERSION, FieldSpec, HeliumError, HeliumReader, HeliumWriter, LogicalColumn, LogicalType,
+    MAGIC, MAX_NESTED_DEPTH, MinMaxValue, NonBlockCoder, PhysicalColumnStats,
     PhysicalField, Pipeline, Result, Schema, StageCoder, TimeUnit, bloom_might_contain,
     canonicalize_json, filter_might_contain_mmv, min_max_value_to_hash_bytes, schema_hash,
 };

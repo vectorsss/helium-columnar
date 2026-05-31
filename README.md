@@ -1012,10 +1012,9 @@ matters for coder selection.
 (see the `catalog` module). `HeliumReader::new` accepts v5; v6 requires
 `HeliumReader::new_with_resolver`.
 
-Formats **v1–v4** (the pre-compression layouts and the uncompressed-footer
-catalog format) were removed before 1.0 — Helium makes no on-disk stability
-promise at 0.x, so regenerate old files from source. The reader rejects any
-unsupported magic with `HeliumError::Format` — never silent corruption.
+The reader rejects any unknown or unsupported magic with `HeliumError::Format`
+— never silent corruption. (See the status note above: the `.he` format may
+change between 0.x minor versions; regenerate from source when upgrading.)
 
 ### v5 layout (default, self-contained)
 
@@ -1081,9 +1080,8 @@ in `<catalog-dir>/<hash-hex>.json`). See the `catalog` module. The
 schema-slot CRC32C catches single-bit hash corruption with a clearer
 "v6 schema-slot CRC mismatch" error than the per-column body CRC would.
 
-> Earlier formats **v1–v4** were removed before 1.0. The reader accepts only
-> v5 and v6; any other magic is rejected with `HeliumError::Format`.
-> Regenerate old files from source.
+> The reader accepts v5 and v6; any other magic is rejected with
+> `HeliumError::Format`.
 
 ### Why compress the schema and footer?
 

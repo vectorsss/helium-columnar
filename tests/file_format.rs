@@ -204,8 +204,9 @@ fn multi_column_roundtrip_in_memory() {
     let written = write_sample_file(cursor, full_sample_schema(), &s).unwrap();
     let bytes = written.into_inner();
 
-    assert_eq!(&bytes[..8], MAGIC);
-    assert_eq!(&bytes[bytes.len() - 8..], MAGIC);
+    // Stable 6-byte magic at the start and inside the 8-byte end header.
+    assert_eq!(&bytes[..6], MAGIC);
+    assert_eq!(&bytes[bytes.len() - 8..bytes.len() - 2], MAGIC);
 
     let registry = CoderRegistry::default();
     let mut reader = HeliumReader::new(Cursor::new(bytes), &registry).unwrap();
@@ -831,10 +832,10 @@ fn dict_prim_rejects_float_input() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn magic_is_v5() {
-    // Current writer emits v5 (self-contained); v6 is the catalog-mode variant.
-    assert_eq!(MAGIC, helium::MAGIC_V5);
-    assert_ne!(helium::MAGIC_V5, helium::MAGIC_V6);
+fn file_header_constants() {
+    // Stable 6-byte file-type magic + current format generation.
+    assert_eq!(MAGIC, b"HELIUM");
+    assert_eq!(helium::FORMAT_VERSION, 1);
 }
 
 fn multi_stripe_schema() -> Schema {
@@ -923,9 +924,9 @@ fn multi_stripe_roundtrip_with_concat() {
     write_stripe(&mut w, 1_900_000_000, 100, 2);
     let bytes = w.finish().unwrap().into_inner();
 
-    // Verify v5 magic at both ends (current writer output).
-    assert_eq!(&bytes[..8], helium::MAGIC_V5);
-    assert_eq!(&bytes[bytes.len() - 8..], helium::MAGIC_V5);
+    // Self-contained header at both ends: HELIUM + version 1 + flags 0.
+    assert_eq!(&bytes[..8], b"HELIUM\x01\x00");
+    assert_eq!(&bytes[bytes.len() - 8..], b"HELIUM\x01\x00");
 
     let mut r = HeliumReader::new(Cursor::new(bytes), &registry).unwrap();
     assert_eq!(r.stripe_count(), 3);
@@ -1082,17 +1083,36 @@ fn v2_footer_crc_detects_tampering() {
 }
 
 #[test]
-fn reader_rejects_dropped_v1_format() {
-    // v1–v4 were removed before 1.0. A v1 magic must now be rejected as an
-    // unsupported version rather than silently parsed.
+fn reader_rejects_unsupported_version() {
+    // A format generation newer than this build supports must be rejected with
+    // a clear error rather than silently misparsed.
     let mut file = Vec::new();
-    file.extend_from_slice(b"HELIUM\x00\x01"); // dropped v1 magic
+    file.extend_from_slice(b"HELIUM"); // valid magic
+    file.push(99); // unsupported future generation
+    file.push(0); // flags
     file.extend_from_slice(&[0u8; 32]); // arbitrary trailing bytes
     let registry = CoderRegistry::default();
     let err = HeliumReader::new(Cursor::new(file), &registry).unwrap_err();
     assert!(
         matches!(err, HeliumError::Format(_)),
-        "v1 magic must be rejected as unsupported format, got {err:?}"
+        "unsupported version must be rejected, got {err:?}"
+    );
+}
+
+#[test]
+fn reader_rejects_unknown_incompat_flag() {
+    // An unknown incompatible (low-nibble) flag bit must be rejected — never
+    // silently ignored, since it may have changed the on-disk layout.
+    let mut file = Vec::new();
+    file.extend_from_slice(b"HELIUM");
+    file.push(1); // supported generation
+    file.push(0b0000_0100); // an incompatible bit this build does not know
+    file.extend_from_slice(&[0u8; 32]);
+    let registry = CoderRegistry::default();
+    let err = HeliumReader::new(Cursor::new(file), &registry).unwrap_err();
+    assert!(
+        matches!(err, HeliumError::Format(_)),
+        "unknown incompat flag must be rejected, got {err:?}"
     );
 }
 

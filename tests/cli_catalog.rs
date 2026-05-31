@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use assert_cmd::Command;
 use helium::catalog::Catalog;
 use helium::{
-    CoderRegistry, CoderSpec, ColumnData, ColumnSpec, DataType, LogicalColumn, MAGIC_V6, Schema,
+    CoderRegistry, CoderSpec, ColumnData, ColumnSpec, DataType, LogicalColumn, Schema,
 };
 use predicates::prelude::*;
 use tempfile::TempDir;
@@ -69,12 +69,12 @@ fn convert_and_verify_with_catalog() {
 
     assert!(he.exists(), ".he file was not created");
 
-    // The file must start with MAGIC_V6 (catalog mode).
+    // The header must flag external-schema / catalog mode (HELIUM + v1 + 0x01).
     let bytes = fs::read(&he).unwrap();
     assert_eq!(
         &bytes[..8],
-        MAGIC_V6,
-        "expected MAGIC_V6 for catalog-mode output, got {:?}",
+        b"HELIUM\x01\x01",
+        "expected catalog-mode header for catalog output, got {:?}",
         &bytes[..8]
     );
 
@@ -119,7 +119,7 @@ fn verify_v6_without_catalog_fails_with_resolver_error() {
         .arg(&he)
         .assert()
         .failure()
-        .stderr(predicate::str::contains("requires schema resolver"));
+        .stderr(predicate::str::contains("requires a schema resolver"));
 }
 
 // ---------------------------------------------------------------------------

@@ -1,30 +1,40 @@
 //! `.he` file format — writer and reader.
 //!
-//! # Versions
+//! # Header, version and flags
 //!
-//! Two container formats exist, both written by the current code:
+//! Every file begins with an 8-byte header: a stable 6-byte magic `b"HELIUM"`,
+//! a 1-byte format generation (`version`), and a 1-byte `flags`. Matching the
+//! magic first lets a reader recognise the file type and report an unsupported
+//! generation rather than mistaking it for a foreign file.
 //!
-//! - **v5** (magic `HELIUM\x00\x05`) — default, self-contained. Multi-stripe;
-//!   per-column and footer CRC32C; the schema JSON in the header **and** the
-//!   footer JSON are both zstd-compressed. Emitted by [`HeliumWriter::new`].
-//! - **v6** (magic `HELIUM\x00\x06`) — catalog mode. Same as v5 except the
-//!   header carries a 36-byte hash reference (32-byte BLAKE3 + 4-byte CRC32C)
-//!   instead of an embedded schema; the reader resolves the hash via a
-//!   caller-provided closure. Emitted by [`HeliumWriter::with_catalog_ref`].
-//!   (PLAN_V2 §6.5.)
+//! - `version` (byte 6) is bumped only on a core layout change an older reader
+//!   cannot parse; a reader rejects a generation newer than it supports.
+//! - `flags` (byte 7) is split into two nibbles. The **low nibble** holds
+//!   *incompatible* features: an unknown set bit there means the reader cannot
+//!   safely parse the file and must reject it. The **high nibble** holds
+//!   *compatible* features an older reader can safely ignore. This is the
+//!   forward-compatibility contract — it must stay fixed once shipped.
 //!
-//! Container formats **v1–v4** (the pre-compression layouts and the
-//! uncompressed-footer catalog format) were removed before 1.0 — Helium makes
-//! no on-disk stability promise at 0.x. Regenerate old files from source.
+//! Two storage modes are selected by a flag bit, not by separate versions:
 //!
-//! Readers reject any file whose footer CRC or per-column CRC fails — errors
-//! include the column/stripe context so operators can isolate which byte
-//! range is bad (design §8.4).
+//! - **Self-contained** (`flags = 0x00`) — the schema JSON is embedded in the
+//!   header. Emitted by [`HeliumWriter::new`].
+//! - **Catalog / external-schema** (`flags` bit 0 set → `0x01`) — the header
+//!   carries a 36-byte hash reference (32-byte BLAKE3 + 4-byte CRC32C) instead
+//!   of an embedded schema; the reader resolves the hash via a caller-provided
+//!   closure. Emitted by [`HeliumWriter::with_catalog_ref`].
 //!
-//! # v5 binary layout (current writer default)
+//! In both modes the schema header (when present) and the footer JSON are
+//! zstd-compressed, every physical column and the footer carry a CRC32C, and
+//! readers reject any file whose CRC fails — errors include the column/stripe
+//! context so a caller can isolate the bad byte range.
+//!
+//! # Self-contained binary layout
 //!
 //! ```text
-//! [0..8]          magic = b"HELIUM\x00\x05"
+//! [0..6]          magic = b"HELIUM"
+//! [6]             version: u8
+//! [7]             flags: u8  (0x00 = self-contained)
 //! [8..12]         schema_len: u32 LE        (length of the COMPRESSED schema bytes)
 //! [12..12+S]      zstd-compressed schema JSON
 //! [body_start..]  stripes laid out in order; each stripe is a contiguous run
@@ -33,15 +43,15 @@
 //! [tail-20..-12]  footer_len: u64 LE  (= compressed byte length)
 //! [tail-12..-8]   footer_crc32c: u32 LE  (CRC32C over the on-disk compressed bytes;
 //!                 corruption is caught before decompression)
-//! [tail-8..]      magic = b"HELIUM\x00\x05"
+//! [tail-8..]      the 8-byte header, echoed as a completeness sentinel
 //! ```
 //!
-//! # v6 binary layout (catalog mode)
+//! # Catalog binary layout
 //!
-//! Same as v5 except the `[8..12+S]` region (`schema_len` + embedded schema
-//! JSON) is replaced by a fixed 36-byte schema slot — 32-byte BLAKE3 hash +
-//! 4-byte CRC32C of the hash — which the reader resolves to a `Schema` via a
-//! caller-provided closure.
+//! Same as self-contained except `flags` has bit 0 set and the `[8..12+S]`
+//! region (`schema_len` + embedded schema JSON) is replaced by a fixed 36-byte
+//! schema slot — 32-byte BLAKE3 hash + 4-byte CRC32C of the hash — which the
+//! reader resolves to a `Schema` via a caller-provided closure.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -63,16 +73,42 @@ pub use super::footer_stats::{
     bloom_might_contain, filter_might_contain_mmv, min_max_value_to_hash_bytes,
 };
 
-/// v5: self-contained format — zstd-compressed schema header + zstd-compressed
-/// footer JSON. Current writer default.
-pub const MAGIC_V5: &[u8; 8] = b"HELIUM\x00\x05";
-/// v6: catalog mode — 36-byte schema-hash slot in the header + zstd-compressed
-/// footer JSON. Current catalog-mode writer output.
-pub const MAGIC_V6: &[u8; 8] = b"HELIUM\x00\x06";
+/// Stable file-type magic — the first 6 bytes of every `.he` file, identical
+/// across all format generations. A reader matches this first, so an unknown
+/// generation surfaces as "unsupported version" rather than a foreign magic.
+pub const MAGIC: &[u8; 6] = b"HELIUM";
 
-/// Current default magic (what the default `HeliumWriter::new` emits).
-/// v6 is the catalog-mode variant via `with_catalog_ref` — see §6.5.
-pub const MAGIC: &[u8; 8] = MAGIC_V5;
+/// On-disk format generation, written at byte 6 of the 8-byte header. Bumped
+/// only when the core layout changes such that an older reader cannot parse it.
+pub const FORMAT_VERSION: u8 = 1;
+
+/// Highest format generation this build can read.
+const MAX_FORMAT_VERSION: u8 = 1;
+
+/// Header flags byte (byte 7). The layout splits into two halves so a reader
+/// knows how to treat a flag it does not recognise:
+/// - **low nibble = incompatible features**: if an unknown bit here is set, the
+///   reader cannot safely parse the file and must reject it.
+/// - **high nibble = compatible features**: an unknown bit here is additive and
+///   safe to ignore (an older reader still reads the data correctly).
+const FLAGS_INCOMPAT_MASK: u8 = 0b0000_1111;
+
+/// Incompatible flag: the schema is stored externally (catalog mode) — the
+/// header carries a hash slot instead of an embedded schema.
+const FLAG_EXTERNAL_SCHEMA: u8 = 0b0000_0001;
+
+/// Incompatible flags this build understands. A set incompatible bit outside
+/// this set means the file uses a feature we cannot read.
+const KNOWN_INCOMPAT_FLAGS: u8 = FLAG_EXTERNAL_SCHEMA;
+
+/// Build the 8-byte file header: `b"HELIUM"` (6) + version (1) + flags (1).
+fn file_header(flags: u8) -> [u8; 8] {
+    let mut h = [0u8; 8];
+    h[..6].copy_from_slice(MAGIC);
+    h[6] = FORMAT_VERSION;
+    h[7] = flags;
+    h
+}
 
 /// zstd compression level for the schema header bytes (v5) and the footer
 /// JSON bytes (v5/v6). Level 3 is zstd's default — payloads are small and
@@ -199,10 +235,10 @@ pub struct HeliumWriter<W: Write + Seek> {
     current_row_count: Option<usize>,
     stripes: Vec<StripeIndex>,
     finished: bool,
-    /// Magic bytes to emit at the end of the file. v5 = `MAGIC_V5` (default
-    /// from [`HeliumWriter::new`]); v6 = `MAGIC_V6` (catalog mode opt-in via
-    /// [`HeliumWriter::with_catalog_ref`]).
-    end_magic: &'static [u8; 8],
+    /// The 8-byte file header, echoed verbatim at the end of the file as a
+    /// completeness sentinel. Mirrors the start header (`b"HELIUM"` + version +
+    /// flags) so the reader can detect truncation.
+    end_magic: [u8; 8],
     /// Whether to compute and embed per-column min/max statistics in the
     /// footer. Defaults to `true`. Disable via [`HeliumWriter::with_stats_disabled`].
     stats_enabled: bool,
@@ -229,10 +265,12 @@ impl<W: Write + Seek> HeliumWriter<W> {
         schema.validate()?;
         let pipelines = resolve_and_validate_pipelines(&schema, registry)?;
 
-        inner.write_all(MAGIC_V5)?;
+        // Self-contained mode: no flags set. Schema JSON is zstd-compressed
+        // before being embedded; the compressed length is what the schema_len
+        // field on disk reports.
+        let header = file_header(0);
+        inner.write_all(&header)?;
         let schema_json = schema.to_json()?;
-        // v5: schema JSON is zstd-compressed before being embedded. The
-        // compressed length is what the schema_len field on disk reports.
         let compressed_schema = zstd::encode_all(&schema_json[..], SCHEMA_ZSTD_LEVEL)
             .map_err(|e| HeliumError::Format(format!("zstd compress schema: {e}")))?;
         let schema_len: u32 = compressed_schema
@@ -242,7 +280,7 @@ impl<W: Write + Seek> HeliumWriter<W> {
         inner.write_all(&schema_len.to_le_bytes())?;
         inner.write_all(&compressed_schema)?;
 
-        Self::finish_init(inner, schema, pipelines, MAGIC_V5)
+        Self::finish_init(inner, schema, pipelines, header)
     }
 
     /// Open a writer that emits **v6 catalog-mode magic** + a 36-byte schema
@@ -291,14 +329,16 @@ impl<W: Write + Seek> HeliumWriter<W> {
 
         let pipelines = resolve_and_validate_pipelines(&schema, registry)?;
 
-        // §6.5 Surface F: 36-byte schema slot = 32-byte BLAKE3 + 4-byte CRC32C.
-        inner.write_all(MAGIC_V6)?;
+        // Catalog mode: the external-schema flag, then a 36-byte schema slot
+        // = 32-byte BLAKE3 hash + 4-byte CRC32C of those bytes.
+        let header = file_header(FLAG_EXTERNAL_SCHEMA);
+        inner.write_all(&header)?;
         let hash_bytes: &[u8; 32] = schema_hash.as_bytes();
         inner.write_all(hash_bytes)?;
         let crc = crc32c::crc32c(hash_bytes);
         inner.write_all(&crc.to_le_bytes())?;
 
-        Self::finish_init(inner, schema, pipelines, MAGIC_V6)
+        Self::finish_init(inner, schema, pipelines, header)
     }
 
     /// Finish initialization after the version-specific header has been
@@ -308,7 +348,7 @@ impl<W: Write + Seek> HeliumWriter<W> {
         mut inner: W,
         schema: Schema,
         pipelines: Vec<Vec<Pipeline>>,
-        end_magic: &'static [u8; 8],
+        end_magic: [u8; 8],
     ) -> Result<Self> {
         let body_start = inner.stream_position()?;
         let column_index = schema
@@ -536,7 +576,7 @@ impl<W: Write + Seek> HeliumWriter<W> {
         self.inner.write_all(&footer_bytes)?;
         self.inner.write_all(&footer_len.to_le_bytes())?;
         self.inner.write_all(&footer_crc.to_le_bytes())?;
-        self.inner.write_all(self.end_magic)?;
+        self.inner.write_all(&self.end_magic)?;
         self.inner.flush()?;
         self.finished = true;
         Ok(self.inner)
@@ -546,18 +586,6 @@ impl<W: Write + Seek> HeliumWriter<W> {
 // ---------------------------------------------------------------------------
 // Reader
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Version {
-    /// v5: self-contained — zstd-compressed schema header + zstd-compressed
-    /// footer JSON. Current writer default.
-    V5,
-    /// v6 (catalog mode): the `[schema_len|schema_json]` region is replaced by
-    /// a fixed 36-byte `[blake3_hash(32) | crc32c(4)]` schema slot, resolved
-    /// out-of-band via a caller-provided closure. Footer JSON is zstd-compressed
-    /// like v5. (PLAN_V2 §6.5 Surface F.)
-    V6,
-}
 
 /// Reads a Helium `.he` file column-by-column, stripe-by-stripe.
 ///
@@ -582,7 +610,10 @@ pub struct HeliumReader<R: Read + Seek> {
     /// [`region_sizes`]: HeliumReader::region_sizes
     footer_len: u64,
     stripes: Vec<StripeIndex>,
-    version: Version,
+    /// On-disk format generation (header byte 6).
+    version: u8,
+    /// Whether the schema is stored externally (catalog mode).
+    external_schema: bool,
 }
 
 impl<R: Read + Seek> fmt::Debug for HeliumReader<R> {
@@ -597,12 +628,11 @@ impl<R: Read + Seek> fmt::Debug for HeliumReader<R> {
 }
 
 impl<R: Read + Seek> HeliumReader<R> {
-    /// Open a `.he` file. Accepts v5 magic (and rejects v6 catalog-mode files
-    /// without a resolver).
+    /// Open a self-contained `.he` file (schema embedded in the header).
     ///
-    /// **v6 files (catalog-mode opt-in) require [`new_with_resolver`].** A v6
-    /// magic seen by this constructor surfaces as
-    /// `HeliumError::Format("v6 file requires schema resolver but none was provided")`
+    /// **Catalog-mode files (external schema, opt-in) require
+    /// [`new_with_resolver`].** Such a file seen by this constructor surfaces as
+    /// `HeliumError::Format("catalog-mode file requires a schema resolver but none was provided")`
     /// — never silent corruption.
     ///
     /// [`new_with_resolver`]: HeliumReader::new_with_resolver
@@ -610,16 +640,14 @@ impl<R: Read + Seek> HeliumReader<R> {
         Self::new_inner(inner, registry, None)
     }
 
-    /// Open a `.he` file with a schema resolver for v6 catalog-mode files.
+    /// Open a `.he` file with a schema resolver for catalog-mode files.
     ///
-    /// For v5 files the resolver is ignored — that format embeds the schema in
-    /// the header. For v6 files, the resolver is called with the 32-byte BLAKE3
-    /// hash from the schema slot and must return the matching `Schema`
-    /// (typically by looking it up in a catalog directory).
+    /// For self-contained files the resolver is ignored — the schema is embedded
+    /// in the header. For catalog-mode files, the resolver is called with the
+    /// 32-byte BLAKE3 hash from the schema slot and must return the matching
+    /// `Schema` (typically by looking it up in a catalog directory).
     ///
-    /// Resolver-returned errors propagate as-is. helium-catalog's filesystem
-    /// resolver follows the convention from §6.5 Surface E for greppable
-    /// reason prefixes.
+    /// Resolver-returned errors propagate as-is.
     pub fn new_with_resolver<F>(inner: R, registry: &CoderRegistry, resolver: F) -> Result<Self>
     where
         F: Fn(&blake3::Hash) -> Result<Schema>,
@@ -632,56 +660,72 @@ impl<R: Read + Seek> HeliumReader<R> {
         registry: &CoderRegistry,
         resolver: Option<SchemaResolver<'_>>,
     ) -> Result<Self> {
-        let mut magic = [0u8; 8];
+        // 8-byte header: b"HELIUM" (6) + version (1) + flags (1).
+        let mut header = [0u8; 8];
         inner
-            .read_exact(&mut magic)
-            .map_err(|e| HeliumError::Format(format!("cannot read start magic: {e}")))?;
-        let version = match &magic {
-            m if m == MAGIC_V6 => Version::V6,
-            m if m == MAGIC_V5 => Version::V5,
-            _ => {
+            .read_exact(&mut header)
+            .map_err(|e| HeliumError::Format(format!("cannot read file header: {e}")))?;
+        if &header[..6] != MAGIC {
+            return Err(HeliumError::Format(format!(
+                "not a Helium file: bad magic {:02x?}",
+                &header[..6]
+            )));
+        }
+        let version = header[6];
+        if version == 0 || version > MAX_FORMAT_VERSION {
+            return Err(HeliumError::Format(format!(
+                "unsupported .he format generation {version}: this build reads up to \
+                 {MAX_FORMAT_VERSION} — regenerate the file from source"
+            )));
+        }
+        let flags = header[7];
+        // An incompatible flag we don't understand means we cannot parse the
+        // file safely; compatible (high-nibble) flags are ignored if unknown.
+        let unknown_incompat = flags & FLAGS_INCOMPAT_MASK & !KNOWN_INCOMPAT_FLAGS;
+        if unknown_incompat != 0 {
+            return Err(HeliumError::Format(format!(
+                "unsupported .he format features (incompatible flags {unknown_incompat:#010b}) \
+                 — regenerate the file from source"
+            )));
+        }
+        let external_schema = flags & FLAG_EXTERNAL_SCHEMA != 0;
+
+        let schema = if external_schema {
+            // Catalog mode: a 36-byte schema slot (32-byte BLAKE3 + 4-byte
+            // CRC32C of the hash), resolved out-of-band via the resolver.
+            let resolver = resolver.ok_or_else(|| {
+                HeliumError::Format(
+                    "catalog-mode file requires a schema resolver but none was provided".into(),
+                )
+            })?;
+            let mut slot = [0u8; CATALOG_SCHEMA_SLOT_LEN];
+            inner.read_exact(&mut slot)?;
+            let mut hash_bytes = [0u8; 32];
+            hash_bytes.copy_from_slice(&slot[..32]);
+            // slot is exactly CATALOG_SCHEMA_SLOT_LEN=36 bytes; [32..36] is 4 bytes.
+            let stored_crc = u32::from_le_bytes(
+                slot[32..36]
+                    .try_into()
+                    .map_err(|_| HeliumError::Format("catalog schema-slot read failed".into()))?,
+            );
+            let actual_crc = crc32c::crc32c(&hash_bytes);
+            if actual_crc != stored_crc {
                 return Err(HeliumError::Format(format!(
-                    "unsupported file format version: magic {magic:02x?}"
+                    "catalog schema-slot CRC mismatch: stored {stored_crc:#x}, computed {actual_crc:#x}"
                 )));
             }
-        };
-
-        let schema = match version {
-            Version::V5 => {
-                let mut len_buf = [0u8; 4];
-                inner.read_exact(&mut len_buf)?;
-                let schema_len = u32::from_le_bytes(len_buf) as usize;
-                let mut schema_bytes = vec![0u8; schema_len];
-                inner.read_exact(&mut schema_bytes)?;
-                let schema_json = zstd::decode_all(&schema_bytes[..])
-                    .map_err(|e| HeliumError::Format(format!("zstd decompress schema: {e}")))?;
-                Schema::from_json(&schema_json)?
-            }
-            Version::V6 => {
-                // §6.5 Surface F: 36-byte schema slot (32-byte BLAKE3 + 4-byte CRC32C of the hash).
-                let resolver = resolver.ok_or_else(|| {
-                    HeliumError::Format(
-                        "v6 file requires schema resolver but none was provided".into(),
-                    )
-                })?;
-                let mut slot = [0u8; CATALOG_SCHEMA_SLOT_LEN];
-                inner.read_exact(&mut slot)?;
-                let mut hash_bytes = [0u8; 32];
-                hash_bytes.copy_from_slice(&slot[..32]);
-                // slot is exactly CATALOG_SCHEMA_SLOT_LEN=36 bytes; [32..36] is 4 bytes.
-                let stored_crc =
-                    u32::from_le_bytes(slot[32..36].try_into().map_err(|_| {
-                        HeliumError::Format("catalog schema-slot read failed".into())
-                    })?);
-                let actual_crc = crc32c::crc32c(&hash_bytes);
-                if actual_crc != stored_crc {
-                    return Err(HeliumError::Format(format!(
-                        "catalog schema-slot CRC mismatch: stored {stored_crc:#x}, computed {actual_crc:#x}"
-                    )));
-                }
-                let hash = blake3::Hash::from_bytes(hash_bytes);
-                resolver(&hash)?
-            }
+            let hash = blake3::Hash::from_bytes(hash_bytes);
+            resolver(&hash)?
+        } else {
+            // Self-contained mode: schema_len (u32 LE) + zstd-compressed schema.
+            let mut len_buf = [0u8; 4];
+            inner.read_exact(&mut len_buf)?;
+            let schema_len = u32::from_le_bytes(len_buf) as usize;
+            let mut schema_bytes = vec![0u8; schema_len];
+            inner.read_exact(&mut schema_bytes)?;
+            let schema_json = zstd::decode_all(&schema_bytes[..])
+                .map_err(|e| HeliumError::Format(format!("zstd decompress schema: {e}")))?;
+            Schema::from_json(&schema_json)?
         };
         let body_start = inner.stream_position()?;
         let pipelines = schema.resolve_all(registry)?;
@@ -703,7 +747,7 @@ impl<R: Read + Seek> HeliumReader<R> {
 
         let mut end_magic = [0u8; 8];
         inner.read_exact(&mut end_magic)?;
-        if end_magic != magic {
+        if end_magic != header {
             return Err(HeliumError::Format(format!(
                 "bad end magic: {end_magic:02x?}"
             )));
@@ -765,6 +809,7 @@ impl<R: Read + Seek> HeliumReader<R> {
             footer_len,
             stripes: footer.stripes,
             version,
+            external_schema,
         })
     }
 
@@ -901,13 +946,14 @@ impl<R: Read + Seek> HeliumReader<R> {
         (self.body_start, body_bytes, footer_region)
     }
 
-    /// Return the format version string (e.g., `"v5"`, `"v6"`).
-    ///
-    /// Useful for display in `helium stats`.
-    pub fn version_str(&self) -> &'static str {
-        match self.version {
-            Version::V5 => "v5",
-            Version::V6 => "v6",
+    /// Return a human-readable format descriptor for display (e.g. `helium
+    /// stats`): the generation plus the storage mode, such as
+    /// `"v1"` (self-contained) or `"v1 (catalog)"`.
+    pub fn version_str(&self) -> String {
+        if self.external_schema {
+            format!("v{} (catalog)", self.version)
+        } else {
+            format!("v{}", self.version)
         }
     }
 
@@ -1039,8 +1085,9 @@ impl<R: Read + Seek> HeliumReader<R> {
             })
             .collect();
 
-        // --- Write the v5 header (self-contained) ---
-        dst.write_all(MAGIC_V5)?;
+        // --- Write the self-contained header ---
+        let header = file_header(0);
+        dst.write_all(&header)?;
         let schema_json = subset.to_json()?;
         let compressed_schema = zstd::encode_all(&schema_json[..], SCHEMA_ZSTD_LEVEL)
             .map_err(|e| HeliumError::Format(format!("zstd compress schema: {e}")))?;
@@ -1107,7 +1154,7 @@ impl<R: Read + Seek> HeliumReader<R> {
         dst.write_all(&footer_bytes)?;
         dst.write_all(&footer_len.to_le_bytes())?;
         dst.write_all(&footer_crc.to_le_bytes())?;
-        dst.write_all(MAGIC_V5)?;
+        dst.write_all(&header)?;
         dst.flush()?;
         Ok(dst)
     }

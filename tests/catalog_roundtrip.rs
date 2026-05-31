@@ -18,7 +18,7 @@ use std::io::Cursor;
 use helium::catalog::{Catalog, schema_hash};
 use helium::{
     CoderRegistry, CoderSpec, ColumnData, ColumnSpec, DataType, HeliumError, HeliumReader,
-    HeliumWriter, LogicalColumn, MAGIC_V6, Schema,
+    HeliumWriter, LogicalColumn, Schema,
 };
 
 fn registry() -> CoderRegistry {
@@ -69,9 +69,9 @@ fn register_then_write_explicit() {
     .unwrap();
     w.finish().unwrap();
 
-    // First 8 bytes must be v6 magic (catalog mode + compressed footer).
+    // Header: HELIUM + version 1 + flags 0x01 (external-schema / catalog mode).
     let bytes = buf.into_inner();
-    assert_eq!(&bytes[..8], MAGIC_V6);
+    assert_eq!(&bytes[..8], b"HELIUM\x01\x01");
     // Schema slot is exactly 36 bytes (32 hash + 4 CRC).
     assert_eq!(&bytes[8..40][..32], hash.as_bytes());
 }
@@ -215,11 +215,12 @@ fn catalog_without_resolver_rejected_with_clear_message() {
 
     // Try to open with the resolver-less constructor.
     buf.set_position(0);
-    let err = HeliumReader::new(&mut buf, &registry()).expect_err("v4 without resolver must error");
+    let err = HeliumReader::new(&mut buf, &registry())
+        .expect_err("catalog file without resolver must error");
     match err {
         HeliumError::Format(msg) => {
             assert!(
-                msg.contains("requires schema resolver but none was provided"),
+                msg.contains("requires a schema resolver but none was provided"),
                 "expected greppable prefix, got: {msg}"
             );
         }

@@ -27,7 +27,7 @@ pub use coder::{
     AccessPattern, BlockCoder, Coder, CoderKind, ColumnData, DataType, NonBlockCoder, StageCoder,
 };
 pub use error::{HeliumError, Result};
-pub use file::{CATALOG_SCHEMA_SLOT_LEN, HeliumReader, HeliumWriter, MAGIC, MAGIC_V5, MAGIC_V6};
+pub use file::{CATALOG_SCHEMA_SLOT_LEN, FORMAT_VERSION, HeliumReader, HeliumWriter, MAGIC};
 pub use footer_stats::{
     ContainmentFilter, MinMaxValue, PhysicalColumnStats, bloom_might_contain,
     filter_might_contain_mmv, min_max_value_to_hash_bytes,

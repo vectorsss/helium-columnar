@@ -73,15 +73,11 @@ fn contains_subseq(haystack: &[u8], needle: &[u8]) -> bool {
 
 /// Extract and decompress the schema JSON bytes from a v3/v5 `.he` file.
 ///
-/// File layout: `magic(8) | schema_len(4 LE) | <zstd-compressed schema> | body | ...`.
-/// Returns the raw (uncompressed) JSON bytes. Accepts both v3 and v5 magic
-/// since both use zstd-compressed schema headers.
-fn decompress_schema_from_v3_file(bytes: &[u8]) -> Vec<u8> {
-    let magic = &bytes[..8];
-    assert!(
-        magic == b"HELIUM\x00\x03" || magic == b"HELIUM\x00\x05",
-        "expected v3 or v5 magic, got: {magic:02x?}"
-    );
+/// File layout: `header(8) | schema_len(4 LE) | <zstd-compressed schema> | body | ...`.
+/// Returns the raw (uncompressed) JSON bytes from a self-contained file.
+fn decompress_schema_from_self_contained_file(bytes: &[u8]) -> Vec<u8> {
+    let magic = &bytes[..6];
+    assert_eq!(magic, b"HELIUM", "expected Helium magic, got: {magic:02x?}");
     let schema_len =
         u32::from_le_bytes(bytes[8..12].try_into().expect("schema_len slice")) as usize;
     let compressed = &bytes[12..12 + schema_len];
@@ -604,9 +600,9 @@ fn dual_format_v2_and_v3_files_coexist() {
     wa.finish().expect("v2 finish");
 
     // Verify the file's embedded SCHEMA JSON uses the v2 kind tag, NOT v3.
-    // Schema bytes are zstd-compressed in v3 file format — decompress first.
+    // Schema bytes are zstd-compressed in the header — decompress first.
     let v2_file_bytes = buf_a.get_ref();
-    let v2_schema_json = decompress_schema_from_v3_file(v2_file_bytes);
+    let v2_schema_json = decompress_schema_from_self_contained_file(v2_file_bytes);
     assert!(
         contains_subseq(&v2_schema_json, b"\"kind\":\"nullable_prim\""),
         "v2-vocabulary schema should keep v2 kind tag; got: {}",
@@ -638,7 +634,7 @@ fn dual_format_v2_and_v3_files_coexist() {
     wb.finish().expect("v3 finish");
 
     let v3_file_bytes = buf_b.get_ref();
-    let v3_schema_json = decompress_schema_from_v3_file(v3_file_bytes);
+    let v3_schema_json = decompress_schema_from_self_contained_file(v3_file_bytes);
     assert!(
         contains_subseq(&v3_schema_json, b"\"kind\":\"nullable\""),
         "v3-vocabulary schema should use new kind tag; got: {}",
@@ -753,7 +749,7 @@ fn writer_starts_with_magic_at_offset_zero() {
     // First 8 bytes must be the current writer's magic (v5 = v3 + compressed footer).
     let bytes = buf.get_ref();
     assert!(bytes.len() >= 8);
-    assert_eq!(&bytes[..8], b"HELIUM\x00\x05");
+    assert_eq!(&bytes[..8], b"HELIUM\x01\x00");
 }
 
 // ---------------------------------------------------------------------------

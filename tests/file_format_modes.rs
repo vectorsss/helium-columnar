@@ -1,24 +1,33 @@
-//! File format v5/v6 — zstd-compressed footer.
+//! File format — the two storage modes (self-contained vs catalog) and the
+//! zstd-compressed footer.
+//!
+//! The 8-byte header is `b"HELIUM"` + version (1) + flags. Self-contained files
+//! have flags `0x00`; catalog (external-schema) files set bit 0 → flags `0x01`.
 //!
 //! Acceptance items:
 //!
-//! 1. Round-trip basic: write via `HeliumWriter::new` → file starts/ends
-//!    with `MAGIC_V5` → open with `HeliumReader::new` → data matches.
+//! 1. Round-trip basic: write via `HeliumWriter::new` → self-contained header
+//!    at both ends → open with `HeliumReader::new` → data matches.
 //! 2. Multi-stripe round-trip: 3 stripes via `finish_stripe()` → all readable.
 //! 3. Footer-compression effective: wide schema (50 columns × 3 stripes)
-//!    → v5 footer_len (on-disk compressed bytes) < raw JSON length;
+//!    → footer_len (on-disk compressed bytes) < raw JSON length;
 //!    require at least 30% smaller.
 //! 4. Footer CRC catches tampering: flip a byte inside the footer region
 //!    → expect `HeliumError::Corrupted` mentioning "footer CRC32C mismatch".
-//! 5. Catalog v6 round-trip: `Catalog::open_writer` → file starts with
-//!    `MAGIC_V6` → readable via `HeliumReader::new_with_resolver`.
+//! 5. Catalog round-trip: `Catalog::open_writer` → external-schema header
+//!    → readable via `HeliumReader::new_with_resolver`.
 
 use std::io::{Cursor, Seek, SeekFrom};
 
 use helium::{
     CoderRegistry, CoderSpec, ColumnData, ColumnSpec, DataType, HeliumError, HeliumReader,
-    HeliumWriter, LogicalColumn, MAGIC_V5, MAGIC_V6, Schema, catalog::Catalog,
+    HeliumWriter, LogicalColumn, Schema, catalog::Catalog,
 };
+
+/// 8-byte header of a self-contained file: `HELIUM` + version 1 + flags 0.
+const HEADER_SELF_CONTAINED: &[u8; 8] = b"HELIUM\x01\x00";
+/// 8-byte header of a catalog (external-schema) file: flags bit 0 set.
+const HEADER_CATALOG: &[u8; 8] = b"HELIUM\x01\x01";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -35,7 +44,7 @@ fn registry() -> CoderRegistry {
 }
 
 /// Write a simple single-column file and return the on-disk bytes.
-fn write_simple_v5() -> Vec<u8> {
+fn write_simple_self_contained() -> Vec<u8> {
     let schema = Schema::new(vec![ColumnSpec::primitive(
         "ts",
         DataType::I64,
@@ -56,16 +65,16 @@ fn write_simple_v5() -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v5_writer_emits_v5_magic_at_both_ends() {
-    let bytes = write_simple_v5();
+fn self_contained_header_at_both_ends() {
+    let bytes = write_simple_self_contained();
     assert!(bytes.len() >= 16, "file too small");
-    assert_eq!(&bytes[..8], MAGIC_V5, "start magic must be v5");
-    assert_eq!(&bytes[bytes.len() - 8..], MAGIC_V5, "end magic must be v5");
+    assert_eq!(&bytes[..8], HEADER_SELF_CONTAINED, "start header must be self-contained");
+    assert_eq!(&bytes[bytes.len() - 8..], HEADER_SELF_CONTAINED, "end header must be self-contained");
 }
 
 #[test]
-fn v5_basic_round_trip() {
-    let bytes = write_simple_v5();
+fn self_contained_basic_round_trip() {
+    let bytes = write_simple_self_contained();
     let reg = registry();
     let mut reader = HeliumReader::new(Cursor::new(bytes), &reg).expect("reader");
     let result = reader.read_column("ts").expect("read");
@@ -81,7 +90,7 @@ fn v5_basic_round_trip() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v5_multi_stripe_round_trip() {
+fn self_contained_multi_stripe_round_trip() {
     let schema = Schema::new(vec![ColumnSpec::primitive(
         "x",
         DataType::I64,
@@ -111,8 +120,8 @@ fn v5_multi_stripe_round_trip() {
     w.finish().expect("finish");
 
     let bytes = buf.into_inner();
-    assert_eq!(&bytes[..8], MAGIC_V5);
-    assert_eq!(&bytes[bytes.len() - 8..], MAGIC_V5);
+    assert_eq!(&bytes[..8], HEADER_SELF_CONTAINED);
+    assert_eq!(&bytes[bytes.len() - 8..], HEADER_SELF_CONTAINED);
 
     let mut r = HeliumReader::new(Cursor::new(bytes), &reg).expect("reader");
     assert_eq!(r.stripe_count(), 3);
@@ -128,7 +137,7 @@ fn v5_multi_stripe_round_trip() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v5_footer_compressed_smaller_than_raw_json() {
+fn footer_compressed_smaller_than_raw_json() {
     // Build a wide schema: 50 primitive columns (10 each of I32, I64, F32, F64, U32).
     let mut cols = Vec::new();
     for idx in 0..10usize {
@@ -170,7 +179,7 @@ fn v5_footer_compressed_smaller_than_raw_json() {
     let schema = Schema::new(cols);
     let reg = registry();
 
-    // Write 3 stripes via v5. Use an owned Cursor so finish() returns the Cursor.
+    // Write 3 stripes. Use an owned Cursor so finish() returns the Cursor.
     let inner_buf = Cursor::new(Vec::<u8>::new());
     let mut w = HeliumWriter::new(inner_buf, schema.clone(), &reg).expect("writer");
     for stripe in 0..3 {
@@ -211,13 +220,13 @@ fn v5_footer_compressed_smaller_than_raw_json() {
             w.finish_stripe().expect("stripe");
         }
     }
-    let v5_bytes = w.finish().expect("finish").into_inner();
+    let file_bytes = w.finish().expect("finish").into_inner();
 
-    // Extract the on-disk footer length from the v5 file.
+    // Extract the on-disk footer length from the file.
     // Trailer is 20 bytes: [footer_len(8) | footer_crc(4) | magic(8)].
-    let file_len = v5_bytes.len();
+    let file_len = file_bytes.len();
     let footer_len_on_disk = u64::from_le_bytes(
-        v5_bytes[file_len - 20..file_len - 12]
+        file_bytes[file_len - 20..file_len - 12]
             .try_into()
             .expect("footer_len slice"),
     ) as usize;
@@ -226,7 +235,7 @@ fn v5_footer_compressed_smaller_than_raw_json() {
     // by building an equivalent v3 file (raw footer) and measuring its footer
     // JSON length. Alternatively, we measure the compressed bytes vs the
     // decompressed bytes.
-    let compressed_footer = &v5_bytes[file_len - 20 - footer_len_on_disk..file_len - 20];
+    let compressed_footer = &file_bytes[file_len - 20 - footer_len_on_disk..file_len - 20];
     let raw_footer_json =
         zstd::decode_all(compressed_footer).expect("zstd decompress footer for measurement");
     let raw_len = raw_footer_json.len();
@@ -234,7 +243,7 @@ fn v5_footer_compressed_smaller_than_raw_json() {
 
     let savings_pct = ((raw_len as f64 - compressed_len as f64) / raw_len as f64) * 100.0;
     eprintln!(
-        "[v5 footer compression] wide-50col × 3 stripes: \
+        "[footer compression] wide-50col × 3 stripes: \
          raw_footer={raw_len} bytes, compressed={compressed_len} bytes, \
          savings={savings_pct:.1}%"
     );
@@ -242,7 +251,7 @@ fn v5_footer_compressed_smaller_than_raw_json() {
     // Require at least 30% savings (design requirement).
     assert!(
         savings_pct >= 30.0,
-        "v5 footer compression must be at least 30% smaller than raw JSON; \
+        "footer compression must be at least 30% smaller than raw JSON; \
          raw={raw_len}, compressed={compressed_len}, savings={savings_pct:.1}%"
     );
 }
@@ -252,8 +261,8 @@ fn v5_footer_compressed_smaller_than_raw_json() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v5_footer_crc_catches_byte_flip() {
-    let mut bytes = write_simple_v5();
+fn footer_crc_catches_byte_flip() {
+    let mut bytes = write_simple_self_contained();
     let file_len = bytes.len();
 
     // The trailer is 20 bytes from the end: [footer_len(8) | footer_crc(4) | magic(8)].
@@ -282,11 +291,11 @@ fn v5_footer_crc_catches_byte_flip() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Catalog v6 round-trip
+// 5. Catalog (external-schema) round-trip
 // ---------------------------------------------------------------------------
 
 #[test]
-fn v6_catalog_round_trip() {
+fn catalog_round_trip() {
     let dir = tempfile::tempdir().expect("tempdir");
     let catalog = Catalog::open(dir.path()).expect("catalog open");
     let schema = Schema::new(vec![ColumnSpec::primitive(
@@ -307,9 +316,9 @@ fn v6_catalog_round_trip() {
     w.finish().expect("finish");
 
     let bytes = buf.get_ref();
-    // File must use v6 magic (catalog mode + compressed footer).
-    assert_eq!(&bytes[..8], MAGIC_V6, "catalog writer must emit v6");
-    assert_eq!(&bytes[bytes.len() - 8..], MAGIC_V6, "end magic must be v6");
+    // File must use the external-schema (catalog) header.
+    assert_eq!(&bytes[..8], HEADER_CATALOG, "catalog writer must set the external-schema flag");
+    assert_eq!(&bytes[bytes.len() - 8..], HEADER_CATALOG, "end header must match");
 
     buf.seek(SeekFrom::Start(0)).expect("rewind");
     let mut reader =
@@ -322,8 +331,10 @@ fn v6_catalog_round_trip() {
 }
 
 #[test]
-fn v6_magic_byte_is_six() {
-    assert_eq!(MAGIC_V6[7], 0x06);
-    assert_ne!(MAGIC_V6, MAGIC_V5);
-    assert_eq!(MAGIC_V5[7], 0x05);
+fn header_flags_distinguish_modes() {
+    // Both modes share the magic + version; only the flags byte (index 7)
+    // differs: bit 0 set = external schema (catalog mode).
+    assert_eq!(&HEADER_SELF_CONTAINED[..7], &HEADER_CATALOG[..7]);
+    assert_eq!(HEADER_SELF_CONTAINED[7], 0x00);
+    assert_eq!(HEADER_CATALOG[7], 0x01);
 }
