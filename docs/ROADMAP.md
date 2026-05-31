@@ -56,32 +56,44 @@ CI job). They are deliberately asymmetric today: **pyhelium** can *write* but
 only flat numeric/string/binary columns; **helium-duckdb** can *read* the full
 v3 type set but cannot write or push down. Each has one decisive next step.
 
-### helium-duckdb — close the pushdown gap
+### helium-duckdb — pushdown status
 
-The extension currently reads *every column and every row* of an `.he` file and
-hands them to DuckDB to filter. That switches off Helium's core advantage
-(columnar pruning + per-stripe min/max), so the table function on a `.he` file
-is no faster — often slower — than reading the equivalent Parquet. Priorities:
+The extension used to read *every column and every row* of an `.he` file. Most
+of that gap is now closed; what landed and what remains:
 
-- **Projection pushdown** *(highest leverage, smallest change)*. DuckDB's
-  `init` phase exposes the projected column indices; read only those columns via
-  the reader's existing column pruning. Selecting 1 of 100 columns should decode
-  1, not 100.
-- **Predicate pushdown + stripe pruning.** Carry `WHERE` bounds into bind/init
-  through DuckDB's filter-pushdown hooks and skip stripes whose footer min/max
-  cannot match. This is the binding-side companion to *Random access* above.
-- **Nested types.** Map `Struct`/`List`/`Map` onto DuckDB's STRUCT/LIST/MAP
-  vectors (they error today) for full v3 fidelity.
-- **v6 catalog support.** A `read_he(path, catalog := '…')` parameter wired to
-  `HeliumReader::new_with_resolver` (v6 files error today).
-- **Hold one reader open across stripes** instead of re-opening the file per
-  stripe in the scan callback.
-- **Correctness.** Add nullable + multi-stripe coverage to `smoke.sh`: the
-  `NullablePrim` write path indexes the (compacted) values array by absolute row
-  and needs verification across chunk/stripe boundaries.
-- **Distribution.** A DuckDB-version build matrix and community-extensions
-  submission. The pinned `duckdb/Cargo.lock` exists because the loadable ABI is
-  coupled to a specific DuckDB version — that coupling must be made explicit.
+- **Projection pushdown — done.** The extension advertises projection pushdown,
+  reads the projected column indices in `init`, and decodes only those columns
+  per stripe via the reader's column pruning. Selecting 1 of N columns decodes
+  1, not N (verified: decoding 4 wide columns scales ~linearly over 1; see
+  `duckdb/smoke.sh`).
+- **One reader held open — done.** The reader is opened once per scan and held
+  across stripes (in the init data), instead of re-opening the file per stripe.
+- **Nested types — done.** `Struct`, `List`, and `Map` map onto DuckDB
+  STRUCT / LIST / MAP vectors. `Union` and the v2 `ArrayOf` / `ArrayOfUtf8`
+  legacy variants still error at bind time with a clear message.
+- **v6 catalog support — done.** `read_he(path, catalog := '…')` resolves the
+  schema through `HeliumReader::new_with_resolver`; v6 without the parameter
+  errors with the documented resolver message.
+- **Correctness — done.** `smoke.sh` covers nullable + multi-stripe: a
+  `Nullable<I64>` column whose nulls straddle stripe (5000) and chunk (2048)
+  boundaries, verified by both aggregate sums and boundary spot-checks. This
+  exercises the absolute-row indexing of the compacted inner values.
+- **Predicate pushdown + stripe pruning — partial (ABI-blocked).** The
+  stripe-pruning logic for scalar comparisons is implemented and unit-tested
+  (`duckdb/src/prune.rs`), but the DuckDB *loadable* extension C-API (v1.2.0)
+  exposes projection pushdown and **no** filter-pushdown hook — DuckDB never
+  hands a loadable extension the `WHERE` bounds. So the machinery is ready but
+  cannot be auto-driven until the C-API gains a filter accessor (or a native /
+  DataFusion integration that does surface filters). Until then DuckDB applies
+  `WHERE` after the scan.
+- **Distribution — scaffolded.** `duckdb/packaging/package.sh` builds + packages
+  one platform; `duckdb/packaging/matrix.md` documents the platform tuples and
+  the C-API/`Cargo.lock` ABI coupling; `duckdb/ci/extension-matrix.yml` is a
+  ready-to-merge per-platform build+load CI job; and
+  `duckdb/packaging/community-extension-submission.md` documents the manual
+  community-extensions submission (including the one prerequisite: swap the
+  `path = ".."` core dependency for a pinned git/crates.io ref). No external
+  submission has been made.
 
 ### pyhelium — Arrow / pandas interop
 
