@@ -6,19 +6,19 @@
 //!
 //! # Supported column types
 //!
-//! Primitives (`I8`..`U64`, `F32`, `F64`), `Utf8`, `Binary`, `NullablePrim`,
-//! `NullableUtf8`, `NullableBinary`, `Date`, `Datetime`, and `Decimal128`.
+//! Primitives (`I8`..`U64`, `F32`, `F64`), `Utf8`, `Binary`, `Nullable` (of a
+//! single-leaf inner type), `Date`, `Datetime`, and `Decimal128`.
 //! For every supported type the "meaningful" physical leaf is selected:
 //!
 //! | Logical type | Leaf used for min/max |
 //! |---|---|
 //! | `Primitive(T)` | the single `values` leaf |
 //! | `Utf8` / `Binary` | `data` leaf (lex ordering) |
-//! | `NullablePrim(T)` | `values` leaf; `present` leaf for null_count |
-//! | `NullableUtf8` / `NullableBinary` | `data` leaf |
+//! | `Nullable<Primitive(T)>` | `values` leaf; `present` leaf for null_count |
+//! | `Nullable<Utf8>` / `Nullable<Binary>` | `data` leaf |
 //! | `Date` / `Datetime` | `values` leaf |
 //! | `Decimal128` | `high` leaf (upper 64 bits) |
-//! | `List`, `Map`, `Struct`, `Union`, `Dict*`, `ArrayOf*` | unsupported → `None` |
+//! | `List`, `Map`, `Struct`, `Union`, `Dictionary` | unsupported → `None` |
 //!
 //! Unsupported types simply return `None` from `min_values` / `max_values`,
 //! which causes `PruningPredicate::prune` to conservatively keep those stripes.
@@ -445,10 +445,6 @@ impl<'a> LeafSelection<'a> {
             LogicalType::Primitive { .. } => Some((0, None)),
             // Utf8 / Binary: offsets at 0, data at 1
             LogicalType::Utf8 | LogicalType::Binary => Some((1, None)),
-            // NullablePrim: present at 0, values at 1
-            LogicalType::NullablePrim { .. } => Some((1, Some(0))),
-            // NullableUtf8 / NullableBinary: present at 0, offsets at 1, data at 2
-            LogicalType::NullableUtf8 | LogicalType::NullableBinary => Some((2, Some(0))),
             // recursive Nullable wrapping a single-leaf type: present at 0, leaf at 1
             LogicalType::Nullable { inner } => {
                 match inner.as_ref() {
@@ -480,9 +476,7 @@ impl<'a> LeafSelection<'a> {
             | LogicalType::List { .. }
             | LogicalType::Map { .. }
             | LogicalType::Union { .. }
-            | LogicalType::Dictionary { .. }
-            | LogicalType::ArrayOf { .. }
-            | LogicalType::ArrayOfUtf8 => None,
+            | LogicalType::Dictionary { .. } => None,
         }
     }
 

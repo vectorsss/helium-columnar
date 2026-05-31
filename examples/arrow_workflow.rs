@@ -285,7 +285,7 @@ fn cd_len(cd: &helium::ColumnData) -> usize {
 fn synthesize_he(out: &std::path::Path) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     use helium::{
         CoderRegistry, CoderSpec, ColumnData, ColumnSpec, DataType, HeliumWriter, LogicalColumn,
-        Schema,
+        LogicalType, Schema,
     };
     use std::fs::File;
 
@@ -308,15 +308,19 @@ fn synthesize_he(out: &std::path::Path) -> Result<std::path::PathBuf, Box<dyn st
             ],
             vec![CoderSpec::new("zstd")],
         ),
-        ColumnSpec::nullable_prim(
+        ColumnSpec::nullable(
             "score",
-            DataType::F64,
+            LogicalType::Primitive {
+                data_type: DataType::F64,
+            },
             vec![
-                CoderSpec::new("rle"),
-                CoderSpec::new("bitpack_auto"),
-                CoderSpec::new("zstd"),
+                vec![
+                    CoderSpec::new("rle"),
+                    CoderSpec::new("bitpack_auto"),
+                    CoderSpec::new("zstd"),
+                ],
+                vec![CoderSpec::new("gorilla"), CoderSpec::new("zstd")],
             ],
-            vec![CoderSpec::new("gorilla"), CoderSpec::new("zstd")],
         ),
     ]);
 
@@ -332,14 +336,14 @@ fn synthesize_he(out: &std::path::Path) -> Result<std::path::PathBuf, Box<dyn st
     )?;
     w.write_column(
         "score",
-        LogicalColumn::NullablePrim {
+        LogicalColumn::Nullable {
             present: (0..100).map(|i| i % 3 != 0).collect(),
-            values: ColumnData::F64(
+            value: Box::new(LogicalColumn::Primitive(ColumnData::F64(
                 (0..100)
                     .filter(|i| i % 3 != 0)
                     .map(|i| i as f64 * 1.5)
                     .collect(),
-            ),
+            ))),
         },
     )?;
     w.finish()?;

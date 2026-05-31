@@ -18,7 +18,7 @@ use std::io::Cursor;
 use helium::catalog::{Catalog, schema_hash};
 use helium::{
     CoderRegistry, CoderSpec, ColumnData, ColumnSpec, DataType, HeliumError, HeliumReader,
-    HeliumWriter, LogicalColumn, Schema,
+    HeliumWriter, LogicalColumn, LogicalType, Schema,
 };
 
 fn registry() -> CoderRegistry {
@@ -298,11 +298,15 @@ fn multi_file_shared_schema_smaller_than_embedded() {
             ],
             vec![CoderSpec::new("zstd")],
         ),
-        ColumnSpec::nullable_prim(
+        ColumnSpec::nullable(
             "weight",
-            DataType::F64,
-            vec![CoderSpec::new("leb128"), CoderSpec::new("zstd")],
-            vec![CoderSpec::new("gorilla"), CoderSpec::new("zstd")],
+            LogicalType::Primitive {
+                data_type: DataType::F64,
+            },
+            vec![
+                vec![CoderSpec::new("leb128"), CoderSpec::new("zstd")],
+                vec![CoderSpec::new("gorilla"), CoderSpec::new("zstd")],
+            ],
         ),
     ]);
 
@@ -336,9 +340,9 @@ fn multi_file_shared_schema_smaller_than_embedded() {
         w.write_column("level", LogicalColumn::Utf8(lvl)).unwrap();
         w.write_column(
             "weight",
-            LogicalColumn::NullablePrim {
+            LogicalColumn::Nullable {
                 present: wp,
-                values: wv,
+                value: Box::new(LogicalColumn::Primitive(wv)),
             },
         )
         .unwrap();
@@ -358,9 +362,9 @@ fn multi_file_shared_schema_smaller_than_embedded() {
         w.write_column("level", LogicalColumn::Utf8(lvl)).unwrap();
         w.write_column(
             "weight",
-            LogicalColumn::NullablePrim {
+            LogicalColumn::Nullable {
                 present: wp,
-                values: wv,
+                value: Box::new(LogicalColumn::Primitive(wv)),
             },
         )
         .unwrap();

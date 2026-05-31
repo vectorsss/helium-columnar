@@ -28,11 +28,6 @@
 //! | `Map<Utf8, V>` | `Map(Struct{ keys: Utf8, values: V })` |
 //! | `Struct { fields }` | `Struct(fields)` |
 //! | `Union { variants }` | `Union(variants, dense)` — dense union |
-//! | `NullablePrim` (legacy flat) | same as `Nullable<Primitive>` |
-//! | `NullableUtf8` (legacy flat) | same as `Nullable<Utf8>` |
-//! | `NullableBinary` (legacy flat) | same as `Nullable<Binary>` |
-//! | `ArrayOf` (legacy flat) | same as `List<Primitive>` |
-//! | `ArrayOfUtf8` (legacy flat) | same as `List<Utf8>` |
 //! | `Dictionary { inner }` | `Dictionary(UInt32, inner)` |
 //!
 //! # Null handling
@@ -45,16 +40,13 @@
 //! inserting placeholder zeros (or empty strings) at null positions.
 //!
 //! `from_arrow_array` on an array with a null buffer always produces the
-//! recursive `Nullable { present, value }` form (never the legacy flat
-//! `NullablePrim` etc.). The inner `value` is **compact** — only valid rows
-//! extracted.
+//! recursive `Nullable { present, value }` form. The inner `value` is
+//! **compact** — only valid rows extracted.
 //!
 //! # Inverse direction note
 //!
 //! `from_arrow_array` always produces **recursive-shaped** `LogicalColumn`
-//! variants (`Nullable`, `List`, etc.) — never legacy flat variants. The legacy
-//! flat variants are only produced by legacy Helium file readers; new
-//! conversions always use the recursive forms.
+//! variants (`Nullable`, `List`, etc.).
 
 pub mod from_arrow;
 pub mod schema;

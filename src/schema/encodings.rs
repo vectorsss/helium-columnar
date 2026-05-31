@@ -59,19 +59,6 @@ pub fn default_encodings(lt: &LogicalType) -> Vec<Vec<CoderSpec>> {
         // Struct: empty top-level; leaf encodings live in FieldSpec children.
         LogicalType::Struct { .. } => vec![],
 
-        // legacy flat compatibility types — not produced by the format adapters but
-        // handled gracefully so this function is safe to call on any LogicalType.
-        LogicalType::ArrayOf { data_type } => {
-            vec![offset_coders(), prim_coders(*data_type)]
-        }
-        LogicalType::ArrayOfUtf8 => {
-            vec![offset_coders(), offset_coders(), data_coders()]
-        }
-        LogicalType::NullablePrim { data_type } => {
-            vec![u8_coders(), prim_coders(*data_type)]
-        }
-        LogicalType::NullableUtf8 => vec![u8_coders(), offset_coders(), data_coders()],
-        LogicalType::NullableBinary => vec![u8_coders(), offset_coders(), data_coders()],
         // Semantic type extensions.
         // Decimal128: two I64 leaves (high + low), both use the integer pipeline.
         LogicalType::Decimal128 { .. } => vec![

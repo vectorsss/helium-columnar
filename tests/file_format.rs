@@ -60,28 +60,36 @@ fn name_column() -> ColumnSpec {
 }
 
 fn nullable_weight_column() -> ColumnSpec {
-    ColumnSpec::nullable_prim(
+    ColumnSpec::nullable(
         "weight",
-        DataType::F64,
+        LogicalType::Primitive {
+            data_type: DataType::F64,
+        },
         vec![
-            CoderSpec::new("rle"),
-            CoderSpec::new("bitpack_auto"),
-            CoderSpec::new("zstd"),
+            vec![
+                CoderSpec::new("rle"),
+                CoderSpec::new("bitpack_auto"),
+                CoderSpec::new("zstd"),
+            ],
+            vec![CoderSpec::new("gorilla"), CoderSpec::new("zstd")],
         ],
-        vec![CoderSpec::new("gorilla"), CoderSpec::new("zstd")],
     )
 }
 
 fn tags_array_column() -> ColumnSpec {
-    ColumnSpec::array_of(
+    ColumnSpec::list(
         "tags",
-        DataType::I32,
+        LogicalType::Primitive {
+            data_type: DataType::I32,
+        },
         vec![
-            CoderSpec::new("delta"),
-            CoderSpec::new("leb128"),
-            CoderSpec::new("zstd"),
+            vec![
+                CoderSpec::new("delta"),
+                CoderSpec::new("leb128"),
+                CoderSpec::new("zstd"),
+            ],
+            vec![CoderSpec::new("pcodec")],
         ],
-        vec![CoderSpec::new("pcodec")],
     )
 }
 
@@ -176,16 +184,20 @@ fn write_sample_file<W: Write + Seek>(sink: W, schema: Schema, s: &Sample) -> he
     writer.write_column("name", LogicalColumn::Utf8(s.name.clone()))?;
     writer.write_column(
         "weight",
-        LogicalColumn::NullablePrim {
+        LogicalColumn::Nullable {
             present: s.weight_present.clone(),
-            values: ColumnData::F64(s.weight_values.clone()),
+            value: Box::new(LogicalColumn::Primitive(ColumnData::F64(
+                s.weight_values.clone(),
+            ))),
         },
     )?;
     writer.write_column(
         "tags",
-        LogicalColumn::ArrayOf {
+        LogicalColumn::List {
             offsets: s.tags_offsets.clone(),
-            values: ColumnData::I32(s.tags_values.clone()),
+            values: Box::new(LogicalColumn::Primitive(ColumnData::I32(
+                s.tags_values.clone(),
+            ))),
         },
     )?;
     writer.finish()
@@ -233,16 +245,20 @@ fn multi_column_roundtrip_in_memory() {
     assert_eq!(all["name"], LogicalColumn::Utf8(s.name.clone()));
     assert_eq!(
         all["weight"],
-        LogicalColumn::NullablePrim {
+        LogicalColumn::Nullable {
             present: s.weight_present.clone(),
-            values: ColumnData::F64(s.weight_values.clone()),
+            value: Box::new(LogicalColumn::Primitive(ColumnData::F64(
+                s.weight_values.clone(),
+            ))),
         }
     );
     assert_eq!(
         all["tags"],
-        LogicalColumn::ArrayOf {
+        LogicalColumn::List {
             offsets: s.tags_offsets.clone(),
-            values: ColumnData::I32(s.tags_values.clone()),
+            values: Box::new(LogicalColumn::Primitive(ColumnData::I32(
+                s.tags_values.clone(),
+            ))),
         }
     );
 }
@@ -388,18 +404,22 @@ fn binary_roundtrip_with_invalid_utf8_bytes() {
 
 #[test]
 fn nullable_prim_all_null_all_present_mixed() {
-    let schema = Schema::new(vec![ColumnSpec::nullable_prim(
+    let schema = Schema::new(vec![ColumnSpec::nullable(
         "v",
-        DataType::I32,
+        LogicalType::Primitive {
+            data_type: DataType::I32,
+        },
         vec![
-            CoderSpec::new("rle"),
-            CoderSpec::new("bitpack_auto"),
-            CoderSpec::new("zstd"),
-        ],
-        vec![
-            CoderSpec::new("delta"),
-            CoderSpec::new("leb128"),
-            CoderSpec::new("zstd"),
+            vec![
+                CoderSpec::new("rle"),
+                CoderSpec::new("bitpack_auto"),
+                CoderSpec::new("zstd"),
+            ],
+            vec![
+                CoderSpec::new("delta"),
+                CoderSpec::new("leb128"),
+                CoderSpec::new("zstd"),
+            ],
         ],
     )]);
     let registry = CoderRegistry::default();
@@ -416,9 +436,9 @@ fn nullable_prim_all_null_all_present_mixed() {
         let mut w = HeliumWriter::new(Cursor::new(Vec::new()), schema.clone(), &registry).unwrap();
         w.write_column(
             "v",
-            LogicalColumn::NullablePrim {
+            LogicalColumn::Nullable {
                 present: present.clone(),
-                values: ColumnData::I32(values.clone()),
+                value: Box::new(LogicalColumn::Primitive(ColumnData::I32(values.clone()))),
             },
         )
         .unwrap();
@@ -428,9 +448,9 @@ fn nullable_prim_all_null_all_present_mixed() {
         let got = r.read_column("v").unwrap();
         assert_eq!(
             got,
-            LogicalColumn::NullablePrim {
+            LogicalColumn::Nullable {
                 present,
-                values: ColumnData::I32(values),
+                value: Box::new(LogicalColumn::Primitive(ColumnData::I32(values))),
             },
             "case: {label}"
         );
@@ -442,27 +462,30 @@ fn nullable_utf8_roundtrip() {
     let present = vec![true, false, true, false, true];
     let strings = vec!["a".to_string(), "bb".to_string(), "ccc".to_string()];
 
-    let schema = Schema::new(vec![ColumnSpec::nullable_utf8(
+    let schema = Schema::new(vec![ColumnSpec::nullable(
         "s",
+        LogicalType::Utf8,
         vec![
-            CoderSpec::new("rle"),
-            CoderSpec::new("bitpack_auto"),
-            CoderSpec::new("zstd"),
+            vec![
+                CoderSpec::new("rle"),
+                CoderSpec::new("bitpack_auto"),
+                CoderSpec::new("zstd"),
+            ],
+            vec![
+                CoderSpec::new("delta"),
+                CoderSpec::new("leb128"),
+                CoderSpec::new("zstd"),
+            ],
+            vec![CoderSpec::new("zstd")],
         ],
-        vec![
-            CoderSpec::new("delta"),
-            CoderSpec::new("leb128"),
-            CoderSpec::new("zstd"),
-        ],
-        vec![CoderSpec::new("zstd")],
     )]);
     let registry = CoderRegistry::default();
     let mut w = HeliumWriter::new(Cursor::new(Vec::new()), schema, &registry).unwrap();
     w.write_column(
         "s",
-        LogicalColumn::NullableUtf8 {
+        LogicalColumn::Nullable {
             present: present.clone(),
-            strings: strings.clone(),
+            value: Box::new(LogicalColumn::Utf8(strings.clone())),
         },
     )
     .unwrap();
@@ -470,7 +493,13 @@ fn nullable_utf8_roundtrip() {
 
     let mut r = HeliumReader::new(Cursor::new(bytes), &registry).unwrap();
     let got = r.read_column("s").unwrap();
-    assert_eq!(got, LogicalColumn::NullableUtf8 { present, strings });
+    assert_eq!(
+        got,
+        LogicalColumn::Nullable {
+            present,
+            value: Box::new(LogicalColumn::Utf8(strings)),
+        }
+    );
 }
 
 #[test]
@@ -478,27 +507,30 @@ fn array_of_utf8_roundtrip() {
     // Row 0: ["a", "bb"], Row 1: [], Row 2: ["ccc"]
     let offsets: Vec<u32> = vec![0, 2, 2, 3];
     let strings: Vec<String> = vec!["a".into(), "bb".into(), "ccc".into()];
-    let schema = Schema::new(vec![ColumnSpec::array_of_utf8(
+    let schema = Schema::new(vec![ColumnSpec::list(
         "tags",
+        LogicalType::Utf8,
         vec![
-            CoderSpec::new("delta"),
-            CoderSpec::new("leb128"),
-            CoderSpec::new("zstd"),
+            vec![
+                CoderSpec::new("delta"),
+                CoderSpec::new("leb128"),
+                CoderSpec::new("zstd"),
+            ],
+            vec![
+                CoderSpec::new("delta"),
+                CoderSpec::new("leb128"),
+                CoderSpec::new("zstd"),
+            ],
+            vec![CoderSpec::new("zstd")],
         ],
-        vec![
-            CoderSpec::new("delta"),
-            CoderSpec::new("leb128"),
-            CoderSpec::new("zstd"),
-        ],
-        vec![CoderSpec::new("zstd")],
     )]);
     let registry = CoderRegistry::default();
     let mut w = HeliumWriter::new(Cursor::new(Vec::new()), schema, &registry).unwrap();
     w.write_column(
         "tags",
-        LogicalColumn::ArrayOfUtf8 {
+        LogicalColumn::List {
             offsets: offsets.clone(),
-            strings: strings.clone(),
+            values: Box::new(LogicalColumn::Utf8(strings.clone())),
         },
     )
     .unwrap();
@@ -506,7 +538,13 @@ fn array_of_utf8_roundtrip() {
 
     let mut r = HeliumReader::new(Cursor::new(bytes), &registry).unwrap();
     let got = r.read_column("tags").unwrap();
-    assert_eq!(got, LogicalColumn::ArrayOfUtf8 { offsets, strings });
+    assert_eq!(
+        got,
+        LogicalColumn::List {
+            offsets,
+            values: Box::new(LogicalColumn::Utf8(strings)),
+        }
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -858,15 +896,19 @@ fn multi_stripe_schema() -> Schema {
             ],
             vec![CoderSpec::new("zstd")],
         ),
-        ColumnSpec::nullable_prim(
+        ColumnSpec::nullable(
             "weight",
-            DataType::F64,
+            LogicalType::Primitive {
+                data_type: DataType::F64,
+            },
             vec![
-                CoderSpec::new("rle"),
-                CoderSpec::new("bitpack_auto"),
-                CoderSpec::new("zstd"),
+                vec![
+                    CoderSpec::new("rle"),
+                    CoderSpec::new("bitpack_auto"),
+                    CoderSpec::new("zstd"),
+                ],
+                vec![CoderSpec::new("gorilla"), CoderSpec::new("zstd")],
             ],
-            vec![CoderSpec::new("gorilla"), CoderSpec::new("zstd")],
         ),
     ])
 }
@@ -902,9 +944,9 @@ fn write_stripe<W: Write + Seek>(
     writer
         .write_column(
             "weight",
-            LogicalColumn::NullablePrim {
+            LogicalColumn::Nullable {
                 present,
-                values: ColumnData::F64(values),
+                value: Box::new(LogicalColumn::Primitive(ColumnData::F64(values))),
             },
         )
         .unwrap();
@@ -949,15 +991,15 @@ fn multi_stripe_roundtrip_with_concat() {
     };
     assert_eq!(all_names.len(), 300);
 
-    // NullablePrim concat.
-    let LogicalColumn::NullablePrim { present, values } = r.read_column("weight").unwrap() else {
-        panic!("expected nullable prim");
+    // Nullable concat.
+    let LogicalColumn::Nullable { present, value } = r.read_column("weight").unwrap() else {
+        panic!("expected nullable");
     };
     assert_eq!(present.len(), 300);
     // present count across the 3 stripes = (100 - 100/3) + (100 - 100/5) + (100 - 100/2)
     //                                    = 66 + 80 + 50 = 196
     let present_count = present.iter().filter(|&&p| p).count();
-    if let ColumnData::F64(v) = values {
+    if let LogicalColumn::Primitive(ColumnData::F64(v)) = *value {
         assert_eq!(v.len(), present_count);
     } else {
         panic!("expected f64 values");
@@ -1287,23 +1329,29 @@ fn array_of_roundtrip_multiple_value_types() {
         ($dt:ident, $variant:ident, $ty:ty, $vals:expr, $pipe:expr) => {{
             let values: Vec<$ty> = $vals;
             let offsets: Vec<u32> = vec![0, 2, 2, values.len() as u32];
-            let schema = Schema::new(vec![ColumnSpec::array_of(
+            let schema = Schema::new(vec![ColumnSpec::list(
                 "a",
-                DataType::$dt,
+                LogicalType::Primitive {
+                    data_type: DataType::$dt,
+                },
                 vec![
-                    CoderSpec::new("delta"),
-                    CoderSpec::new("leb128"),
-                    CoderSpec::new("zstd"),
+                    vec![
+                        CoderSpec::new("delta"),
+                        CoderSpec::new("leb128"),
+                        CoderSpec::new("zstd"),
+                    ],
+                    $pipe,
                 ],
-                $pipe,
             )]);
             let registry = CoderRegistry::default();
             let mut w = HeliumWriter::new(Cursor::new(Vec::new()), schema, &registry).unwrap();
             w.write_column(
                 "a",
-                LogicalColumn::ArrayOf {
+                LogicalColumn::List {
                     offsets: offsets.clone(),
-                    values: ColumnData::$variant(values.clone()),
+                    values: Box::new(LogicalColumn::Primitive(ColumnData::$variant(
+                        values.clone(),
+                    ))),
                 },
             )
             .unwrap();
@@ -1312,9 +1360,9 @@ fn array_of_roundtrip_multiple_value_types() {
             let got = r.read_column("a").unwrap();
             assert_eq!(
                 got,
-                LogicalColumn::ArrayOf {
+                LogicalColumn::List {
                     offsets,
-                    values: ColumnData::$variant(values),
+                    values: Box::new(LogicalColumn::Primitive(ColumnData::$variant(values))),
                 },
                 "Array<{:?}> mismatch",
                 DataType::$dt
@@ -1353,23 +1401,29 @@ fn nullable_prim_roundtrip_more_types() {
         ($dt:ident, $variant:ident, $ty:ty, $vals:expr, $values_pipe:expr) => {{
             let values: Vec<$ty> = $vals;
             assert_eq!(values.len(), 3, "test expects 3 present values");
-            let schema = Schema::new(vec![ColumnSpec::nullable_prim(
+            let schema = Schema::new(vec![ColumnSpec::nullable(
                 "n",
-                DataType::$dt,
+                LogicalType::Primitive {
+                    data_type: DataType::$dt,
+                },
                 vec![
-                    CoderSpec::new("rle"),
-                    CoderSpec::new("bitpack_auto"),
-                    CoderSpec::new("zstd"),
+                    vec![
+                        CoderSpec::new("rle"),
+                        CoderSpec::new("bitpack_auto"),
+                        CoderSpec::new("zstd"),
+                    ],
+                    $values_pipe,
                 ],
-                $values_pipe,
             )]);
             let registry = CoderRegistry::default();
             let mut w = HeliumWriter::new(Cursor::new(Vec::new()), schema, &registry).unwrap();
             w.write_column(
                 "n",
-                LogicalColumn::NullablePrim {
+                LogicalColumn::Nullable {
                     present: present.clone(),
-                    values: ColumnData::$variant(values.clone()),
+                    value: Box::new(LogicalColumn::Primitive(ColumnData::$variant(
+                        values.clone(),
+                    ))),
                 },
             )
             .unwrap();
@@ -1378,9 +1432,9 @@ fn nullable_prim_roundtrip_more_types() {
             let got = r.read_column("n").unwrap();
             assert_eq!(
                 got,
-                LogicalColumn::NullablePrim {
+                LogicalColumn::Nullable {
                     present: present.clone(),
-                    values: ColumnData::$variant(values),
+                    value: Box::new(LogicalColumn::Primitive(ColumnData::$variant(values))),
                 },
                 "Nullable<{:?}> mismatch",
                 DataType::$dt

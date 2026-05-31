@@ -49,7 +49,7 @@ pub fn structural_candidates(
 
     match role {
         // -----------------------------------------------------------------------
-        // Monotonically-increasing U32 offsets (List, Map, ArrayOf, Utf8, Binary).
+        // Monotonically-increasing U32 offsets (List, Map, Utf8, Binary).
         // Delta coding is ideal; deltamin+bitpack is also strong.
         // -----------------------------------------------------------------------
         "offsets" | "outer_offsets" | "inner_offsets" | "dict_offsets" => {

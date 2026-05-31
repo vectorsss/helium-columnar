@@ -28,11 +28,10 @@
 //!   applies `WHERE` after the scan. See `docs/ROADMAP.md`.
 //!
 //! ## Type coverage
-//! - Flat: all primitives, `Utf8`, `Binary`, the legacy flat nullable/array variants,
+//! - Scalar: all primitives, `Utf8`, `Binary`, `Nullable`,
 //!   `Dictionary`, and the semantic types (`Decimal128`, `Date`, `Datetime`).
 //! - Nested: `Struct`, `List`, and `Map` map onto DuckDB STRUCT / LIST / MAP
-//!   vectors. `Union` and the legacy flat `ArrayOf*` variants are still rejected
-//!   at bind time with a clear message.
+//!   vectors. `Union` is rejected at bind time with a clear message.
 //! - Catalog-mode files are read by passing `catalog := '<dir>'`.
 
 use std::cell::UnsafeCell;
@@ -321,18 +320,6 @@ pub(crate) fn logical_type_to_duckdb(
         Utf8 => Ok(LogicalTypeHandle::from(LogicalTypeId::Varchar)),
         Binary => Ok(LogicalTypeHandle::from(LogicalTypeId::Blob)),
 
-        // legacy flat array types — not yet supported
-        ArrayOf { .. } | ArrayOfUtf8 => Err(
-            "read_he: ArrayOf / ArrayOfUtf8 (legacy flat) not yet supported; \
-             convert the schema to a recursive List first with the helium CLI"
-                .into(),
-        ),
-
-        // legacy flat nullable / dict
-        NullablePrim { data_type } => Ok(primitive_dt_to_duckdb(*data_type)),
-        NullableUtf8 => Ok(LogicalTypeHandle::from(LogicalTypeId::Varchar)),
-        NullableBinary => Ok(LogicalTypeHandle::from(LogicalTypeId::Blob)),
-
         // recursive nullable wrapper — DuckDB columns are always nullable, unwrap the inner type
         Nullable { inner } => logical_type_to_duckdb(inner),
 
@@ -421,11 +408,6 @@ impl VariantName for LogicalColumn {
             LogicalColumn::Primitive(_) => "Primitive",
             LogicalColumn::Utf8(_) => "Utf8",
             LogicalColumn::Binary(_) => "Binary",
-            LogicalColumn::ArrayOf { .. } => "ArrayOf",
-            LogicalColumn::ArrayOfUtf8 { .. } => "ArrayOfUtf8",
-            LogicalColumn::NullablePrim { .. } => "NullablePrim",
-            LogicalColumn::NullableUtf8 { .. } => "NullableUtf8",
-            LogicalColumn::NullableBinary { .. } => "NullableBinary",
             LogicalColumn::Dictionary { .. } => "Dictionary",
             LogicalColumn::Struct { .. } => "Struct",
             LogicalColumn::List { .. } => "List",

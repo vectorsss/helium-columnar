@@ -83,66 +83,10 @@ pub fn to_arrow_array(col: &LogicalColumn, lt: &LogicalType) -> Result<ArrayRef>
         }
 
         // ------------------------------------------------------------------ //
-        // legacy flat NullablePrim → same as Nullable<Primitive>                      //
-        // ------------------------------------------------------------------ //
-        (
-            LogicalColumn::NullablePrim { present, values },
-            LogicalType::NullablePrim { data_type },
-        ) => {
-            let inner_lt = LogicalType::Primitive {
-                data_type: *data_type,
-            };
-            // Build an expanded primitive column (null positions → 0)
-            let expanded = expand_nullable_primitive(present, values);
-            let null_buf = build_null_buffer(present);
-            primitive_with_nulls(expanded, &null_buf, &inner_lt)
-        }
-
-        // ------------------------------------------------------------------ //
-        // legacy flat NullableUtf8                                                     //
-        // ------------------------------------------------------------------ //
-        (LogicalColumn::NullableUtf8 { present, strings }, LogicalType::NullableUtf8) => {
-            let expanded = expand_nullable_strings(present, strings);
-            let null_buf = build_null_buffer(present);
-            let arr = StringArray::from(expanded.iter().map(|s| s.as_deref()).collect::<Vec<_>>());
-            Ok(Arc::new(arr.with_validity_opt(null_buf)) as ArrayRef)
-        }
-
-        // ------------------------------------------------------------------ //
-        // legacy flat NullableBinary                                                   //
-        // ------------------------------------------------------------------ //
-        (LogicalColumn::NullableBinary { present, blobs }, LogicalType::NullableBinary) => {
-            let expanded = expand_nullable_binary(present, blobs);
-            let null_buf = build_null_buffer(present);
-            let arr = BinaryArray::from(expanded.iter().map(|b| b.as_deref()).collect::<Vec<_>>());
-            Ok(Arc::new(arr.with_validity_opt(null_buf)) as ArrayRef)
-        }
-
-        // ------------------------------------------------------------------ //
         // List (recursive) — offsets + inner values                                 //
         // ------------------------------------------------------------------ //
         (LogicalColumn::List { offsets, values }, LogicalType::List { inner }) => {
             to_arrow_list(offsets, values, inner)
-        }
-
-        // ------------------------------------------------------------------ //
-        // legacy flat ArrayOf → List<Primitive>                                        //
-        // ------------------------------------------------------------------ //
-        (LogicalColumn::ArrayOf { offsets, values }, LogicalType::ArrayOf { data_type }) => {
-            let inner_lt = LogicalType::Primitive {
-                data_type: *data_type,
-            };
-            let inner_col = LogicalColumn::Primitive(values.clone());
-            to_arrow_list(offsets, &inner_col, &inner_lt)
-        }
-
-        // ------------------------------------------------------------------ //
-        // legacy flat ArrayOfUtf8 → List<Utf8>                                        //
-        // ------------------------------------------------------------------ //
-        (LogicalColumn::ArrayOfUtf8 { offsets, strings }, LogicalType::ArrayOfUtf8) => {
-            let inner_lt = LogicalType::Utf8;
-            let inner_col = LogicalColumn::Utf8(strings.clone());
-            to_arrow_list(offsets, &inner_col, &inner_lt)
         }
 
         // ------------------------------------------------------------------ //
@@ -561,12 +505,6 @@ fn make_zero_row(lt: &LogicalType) -> Result<LogicalColumn> {
             dictionary: Box::new(make_zero_row(inner)?),
             indices: vec![0],
         },
-        // legacy flat types should not appear inside a Nullable<recursive type> in practice
-        _ => {
-            return Err(HeliumError::Format(format!(
-                "expand_nullable_generic: unsupported inner type {lt:?}"
-            )));
-        }
     })
 }
 
@@ -628,7 +566,6 @@ fn make_empty_col(lt: &LogicalType) -> LogicalColumn {
             dictionary: Box::new(make_empty_col(inner)),
             indices: vec![],
         },
-        _ => LogicalColumn::Utf8(vec![]), // fallback
     }
 }
 
@@ -874,11 +811,6 @@ fn col_type_name(col: &LogicalColumn) -> &'static str {
         LogicalColumn::Primitive(_) => "Primitive",
         LogicalColumn::Utf8(_) => "Utf8",
         LogicalColumn::Binary(_) => "Binary",
-        LogicalColumn::ArrayOf { .. } => "ArrayOf",
-        LogicalColumn::ArrayOfUtf8 { .. } => "ArrayOfUtf8",
-        LogicalColumn::NullablePrim { .. } => "NullablePrim",
-        LogicalColumn::NullableUtf8 { .. } => "NullableUtf8",
-        LogicalColumn::NullableBinary { .. } => "NullableBinary",
         LogicalColumn::Dictionary { .. } => "Dictionary",
         LogicalColumn::Struct { .. } => "Struct",
         LogicalColumn::List { .. } => "List",

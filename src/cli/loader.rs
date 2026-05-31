@@ -342,7 +342,7 @@ fn load_csv_data_chunked(
 enum ColumnAccum {
     /// Numeric, Utf8, and all non-binary columns: values as strings.
     Strings(Vec<String>),
-    /// Binary / Nullable<Binary> / NullableBinary columns: raw bytes.
+    /// Binary / Nullable<Binary> columns: raw bytes.
     /// `None` represents a null entry (OPTIONAL Parquet column with no value).
     Bytes(Vec<Option<Vec<u8>>>),
 }
@@ -352,7 +352,7 @@ enum ColumnAccum {
 #[cfg(feature = "schema-parquet")]
 fn is_binary_type(lt: &LogicalType) -> bool {
     match lt {
-        LogicalType::Binary | LogicalType::NullableBinary => true,
+        LogicalType::Binary => true,
         LogicalType::Nullable { inner } => matches!(inner.as_ref(), LogicalType::Binary),
         _ => false,
     }
@@ -362,7 +362,6 @@ fn is_binary_type(lt: &LogicalType) -> bool {
 ///
 /// - `LogicalType::Binary` → all entries must be `Some`; builds `LogicalColumn::Binary`.
 /// - `LogicalType::Nullable { Binary }` → builds `LogicalColumn::Nullable { present, Binary }`.
-/// - `LogicalType::NullableBinary` (legacy) → builds `LogicalColumn::NullableBinary`.
 #[cfg(feature = "schema-parquet")]
 fn bytes_accum_to_logical_column(
     entries: Vec<Option<Vec<u8>>>,
@@ -402,22 +401,6 @@ fn bytes_accum_to_logical_column(
                 present,
                 value: Box::new(LogicalColumn::Binary(blobs)),
             })
-        }
-        LogicalType::NullableBinary => {
-            let mut present = Vec::with_capacity(entries.len());
-            let mut blobs: Vec<Vec<u8>> = Vec::new();
-            for entry in entries {
-                match entry {
-                    Some(b) => {
-                        present.push(true);
-                        blobs.push(b);
-                    }
-                    None => {
-                        present.push(false);
-                    }
-                }
-            }
-            Ok(LogicalColumn::NullableBinary { present, blobs })
         }
         other => anyhow::bail!(
             "bytes_accum_to_logical_column called with non-binary type {:?}",
@@ -798,8 +781,6 @@ const CSV_NULLS: &[&str] = &["", "NULL", "null", "NA"];
 /// [`serde_json::Value`]s — one per row — matching `lt` recursively.
 ///
 /// This is the canonical JSON data loader for all recursive `LogicalType` variants.
-/// Legacy flat variants (`NullablePrim`, `NullableUtf8`, etc.) are also handled
-/// by delegating to the flat string path for back-compat.
 pub fn json_values_to_logical_column(
     values: &[serde_json::Value],
     lt: &LogicalType,
@@ -1055,54 +1036,6 @@ pub fn json_values_to_logical_column(
             })
         }
 
-        // ----------------------------------------------------------------
-        // Legacy flat variants — delegate to the string path for back-compat
-        // ----------------------------------------------------------------
-        LogicalType::NullablePrim { data_type } => {
-            let nulls = json_null_sentinels();
-            let strs = json_values_to_strings(values);
-            let (present, non_null_strs) = split_nullable(&strs, &nulls);
-            let cd = parse_primitive_vec(&non_null_strs, *data_type)?;
-            Ok(LogicalColumn::NullablePrim {
-                present,
-                values: cd,
-            })
-        }
-        LogicalType::NullableUtf8 => {
-            let nulls = json_null_sentinels();
-            let strs = json_values_to_strings(values);
-            let (present, non_null_strs) = split_nullable(&strs, &nulls);
-            Ok(LogicalColumn::NullableUtf8 {
-                present,
-                strings: non_null_strs,
-            })
-        }
-        LogicalType::NullableBinary => {
-            let nulls = json_null_sentinels();
-            let strs = json_values_to_strings(values);
-            let (present, non_null_strs) = split_nullable(&strs, &nulls);
-            let blobs: Vec<Vec<u8>> = non_null_strs
-                .iter()
-                .map(|s| s.as_bytes().to_vec())
-                .collect();
-            Ok(LogicalColumn::NullableBinary { present, blobs })
-        }
-        LogicalType::ArrayOf { data_type } => {
-            let strs = json_values_to_strings(values);
-            let nulls = json_null_sentinels();
-            strings_to_logical_column(
-                &strs,
-                &LogicalType::ArrayOf {
-                    data_type: *data_type,
-                },
-                &nulls,
-            )
-        }
-        LogicalType::ArrayOfUtf8 => {
-            let strs = json_values_to_strings(values);
-            let nulls = json_null_sentinels();
-            strings_to_logical_column(&strs, &LogicalType::ArrayOfUtf8, &nulls)
-        }
         LogicalType::Dictionary { .. } => {
             bail!(
                 "dict types are not directly loadable from JSON; \
@@ -1343,38 +1276,11 @@ pub fn strings_to_logical_column(
              use a Parquet source with a matching nested schema instead",
             lt
         ),
-        // Legacy flat types — treat same as the recursive equivalents.
-        LogicalType::NullablePrim { data_type } => {
-            let (present, non_null_strs) = split_nullable(values, nulls);
-            let cd = parse_primitive_vec(&non_null_strs, *data_type)?;
-            Ok(LogicalColumn::NullablePrim {
-                present,
-                values: cd,
-            })
-        }
-        LogicalType::NullableUtf8 => {
-            let (present, non_null_strs) = split_nullable(values, nulls);
-            Ok(LogicalColumn::NullableUtf8 {
-                present,
-                strings: non_null_strs,
-            })
-        }
-        LogicalType::NullableBinary => {
-            let (present, non_null_strs) = split_nullable(values, nulls);
-            let blobs: Vec<Vec<u8>> = non_null_strs
-                .iter()
-                .map(|s| s.as_bytes().to_vec())
-                .collect();
-            Ok(LogicalColumn::NullableBinary { present, blobs })
-        }
         LogicalType::Dictionary { .. } => {
             bail!(
                 "dict types are not directly loadable from flat files; \
                  the optimizer or a pre-built dict pipeline is required"
             )
-        }
-        LogicalType::ArrayOf { .. } | LogicalType::ArrayOfUtf8 => {
-            bail!("legacy flat array types are not supported by the flat loader")
         }
         // Semantic types: parse from string representation.
         LogicalType::Decimal128 { .. } => {
@@ -1502,19 +1408,6 @@ pub fn raw_bytes(lc: &LogicalColumn) -> usize {
         LogicalColumn::Primitive(cd) => column_data_bytes(cd),
         LogicalColumn::Utf8(v) => v.iter().map(|s| s.len() + 4).sum::<usize>(),
         LogicalColumn::Binary(v) => v.iter().map(|b| b.len() + 4).sum::<usize>(),
-        LogicalColumn::NullablePrim { present, values } => {
-            present.len().div_ceil(8) + column_data_bytes(values)
-        }
-        LogicalColumn::NullableUtf8 { present, strings } => {
-            present.len().div_ceil(8) + strings.iter().map(|s| s.len() + 4).sum::<usize>()
-        }
-        LogicalColumn::NullableBinary { present, blobs } => {
-            present.len().div_ceil(8) + blobs.iter().map(|b| b.len() + 4).sum::<usize>()
-        }
-        LogicalColumn::ArrayOf { offsets, values } => offsets.len() * 4 + column_data_bytes(values),
-        LogicalColumn::ArrayOfUtf8 { offsets, strings } => {
-            offsets.len() * 4 + strings.iter().map(|s| s.len() + 4).sum::<usize>()
-        }
         // Recursive types: recurse into physical sub-columns via a rough estimate.
         LogicalColumn::Struct { fields } => fields.iter().map(|(_, lc)| raw_bytes(lc)).sum(),
         LogicalColumn::List { offsets, values } => offsets.len() * 4 + raw_bytes(values),

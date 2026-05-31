@@ -139,8 +139,18 @@ fn schema_builder_sanity_8col() -> Schema {
         ColumnSpec::primitive("user_id", DataType::I64, delta_leb_zstd()),
         ColumnSpec::utf8("level", delta_leb_zstd(), zstd_only()),
         ColumnSpec::utf8("message", delta_leb_zstd(), zstd_only()),
-        ColumnSpec::nullable_prim("weight", DataType::F64, leb_zstd(), gorilla_zstd()),
-        ColumnSpec::array_of_utf8("tags", delta_leb_zstd(), delta_leb_zstd(), zstd_only()),
+        ColumnSpec::nullable(
+            "weight",
+            LogicalType::Primitive {
+                data_type: DataType::F64,
+            },
+            vec![leb_zstd(), gorilla_zstd()],
+        ),
+        ColumnSpec::list(
+            "tags",
+            LogicalType::Utf8,
+            vec![delta_leb_zstd(), delta_leb_zstd(), zstd_only()],
+        ),
         ColumnSpec::struct_col(
             "addr",
             vec![

@@ -150,22 +150,25 @@ fn stats_all_nan_f64() {
 
 #[test]
 fn stats_nullable_i64() {
-    // legacy flat NullablePrim style.
-    let schema = Schema::new(vec![ColumnSpec::nullable_prim(
+    let schema = Schema::new(vec![ColumnSpec::nullable(
         "col",
-        DataType::I64,
+        LogicalType::Primitive {
+            data_type: DataType::I64,
+        },
         vec![
-            CoderSpec::new("rle"),
-            CoderSpec::new("bitpack_auto"),
-            CoderSpec::new("zstd"),
+            vec![
+                CoderSpec::new("rle"),
+                CoderSpec::new("bitpack_auto"),
+                CoderSpec::new("zstd"),
+            ],
+            // Values pipeline: delta → leb128 → zstd (I64 → Bytes chain).
+            int_pipe(),
         ],
-        // Values pipeline: delta → leb128 → zstd (I64 → Bytes chain).
-        int_pipe(),
     )]);
     // [Some(10), None, Some(-5), None, Some(0)]
-    let data = LogicalColumn::NullablePrim {
+    let data = LogicalColumn::Nullable {
         present: vec![true, false, true, false, true],
-        values: ColumnData::I64(vec![10, -5, 0]),
+        value: Box::new(LogicalColumn::Primitive(ColumnData::I64(vec![10, -5, 0]))),
     };
     let bytes = write_single_col(schema, data);
 

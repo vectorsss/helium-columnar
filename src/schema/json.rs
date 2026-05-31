@@ -575,27 +575,6 @@ fn logical_column_row_to_json_value(
         LogicalColumn::Primitive(cd) => Some(column_data_to_json(cd, row)),
         LogicalColumn::Utf8(v) => v.get(row).map(|s| Value::String(s.clone())),
         LogicalColumn::Binary(v) => v.get(row).map(|b| Value::String(hex_encode(b))),
-        LogicalColumn::NullablePrim { present, values } => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return Some(Value::Null);
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            Some(column_data_to_json(values, idx))
-        }
-        LogicalColumn::NullableUtf8 { present, strings } => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return Some(Value::Null);
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            strings.get(idx).map(|s| Value::String(s.clone()))
-        }
-        LogicalColumn::NullableBinary { present, blobs } => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return Some(Value::Null);
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            blobs.get(idx).map(|b| Value::String(hex_encode(b)))
-        }
         LogicalColumn::Nullable { present, value } => {
             if !present.get(row).copied().unwrap_or(false) {
                 return Some(Value::Null);
@@ -645,23 +624,6 @@ fn logical_column_row_to_json_value(
             let vrow = tags[..row].iter().filter(|&&t| t as usize == tag).count();
             let val = logical_column_row_to_json_value(vcol, vrow).unwrap_or(Value::Null);
             Some(json!({ vname.as_str(): val }))
-        }
-        LogicalColumn::ArrayOf { offsets, values } => {
-            let start = *offsets.get(row)? as usize;
-            let end = *offsets.get(row + 1)? as usize;
-            let arr: Vec<Value> = (start..end)
-                .map(|i| column_data_to_json(values, i))
-                .collect();
-            Some(Value::Array(arr))
-        }
-        LogicalColumn::ArrayOfUtf8 { offsets, strings } => {
-            let start = *offsets.get(row)? as usize;
-            let end = *offsets.get(row + 1)? as usize;
-            let arr: Vec<Value> = strings[start..end.min(strings.len())]
-                .iter()
-                .map(|s| Value::String(s.clone()))
-                .collect();
-            Some(Value::Array(arr))
         }
         // Dictionary{inner}: look up the dictionary entry for this row's index.
         LogicalColumn::Dictionary {
@@ -817,9 +779,9 @@ mod tests {
         let mut cols: HashMap<String, LogicalColumn> = HashMap::new();
         cols.insert(
             "val".to_string(),
-            LogicalColumn::NullablePrim {
+            LogicalColumn::Nullable {
                 present: vec![true, false, true],
-                values: ColumnData::I32(vec![1, 3]),
+                value: Box::new(LogicalColumn::Primitive(ColumnData::I32(vec![1, 3]))),
             },
         );
 

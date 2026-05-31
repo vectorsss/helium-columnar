@@ -219,8 +219,10 @@ fn build_synthetic(n: usize) -> FlatDataset {
     };
     let lt_level = LogicalType::Utf8;
     let lt_host = LogicalType::Utf8;
-    let lt_maybe = LogicalType::NullablePrim {
-        data_type: DataType::I32,
+    let lt_maybe = LogicalType::Nullable {
+        inner: Box::new(LogicalType::Primitive {
+            data_type: DataType::I32,
+        }),
     };
     let lt_blob = LogicalType::Binary;
 
@@ -280,9 +282,9 @@ fn build_synthetic(n: usize) -> FlatDataset {
     cols.insert("host".to_string(), LogicalColumn::Utf8(host));
     cols.insert(
         "maybe_val".to_string(),
-        LogicalColumn::NullablePrim {
+        LogicalColumn::Nullable {
             present: np,
-            values: ColumnData::I32(nv),
+            value: Box::new(LogicalColumn::Primitive(ColumnData::I32(nv))),
         },
     );
     cols.insert("blob".to_string(), LogicalColumn::Binary(blobs));
@@ -307,9 +309,6 @@ fn build_synthetic(n: usize) -> FlatDataset {
 fn is_flat_compatible(lt: &LogicalType) -> bool {
     match lt {
         LogicalType::Primitive { .. } | LogicalType::Utf8 | LogicalType::Binary => true,
-        LogicalType::NullablePrim { .. }
-        | LogicalType::NullableUtf8
-        | LogicalType::NullableBinary => true,
         LogicalType::Nullable { inner } => is_flat_leaf(inner),
         _ => false,
     }
@@ -582,37 +581,6 @@ fn accumulate_field(
                 );
             }
         }
-        LogicalType::NullablePrim { data_type: _ } => {
-            present_buf.get_mut(name).unwrap().push(!is_null);
-            if !is_null {
-                let v = match field {
-                    Some(Field::Int(x)) => *x,
-                    Some(Field::Long(x)) => *x as i32,
-                    _ => 0,
-                };
-                i32_buf.get_mut(name).unwrap().push(v);
-            }
-        }
-        LogicalType::NullableUtf8 => {
-            present_buf.get_mut(name).unwrap().push(!is_null);
-            if !is_null {
-                let v = match field {
-                    Some(Field::Str(s)) => s.clone(),
-                    _ => String::new(),
-                };
-                utf8_buf.get_mut(name).unwrap().push(v);
-            }
-        }
-        LogicalType::NullableBinary => {
-            present_buf.get_mut(name).unwrap().push(!is_null);
-            if !is_null {
-                let v = match field {
-                    Some(Field::Bytes(b)) => b.data().to_vec(),
-                    _ => vec![],
-                };
-                bin_buf.get_mut(name).unwrap().push(v);
-            }
-        }
         _ => {}
     }
 }
@@ -705,29 +673,6 @@ fn build_logical_column(
                 value: Box::new(inner_lc),
             }
         }
-        LogicalType::NullablePrim { data_type } => {
-            let present = present_buf.remove(name).unwrap_or_default();
-            // Must match the actual data_type so the writer accepts it.
-            let raw_i32 = i32_buf.remove(name).unwrap_or_default();
-            let values = match data_type {
-                DataType::I8 => ColumnData::I8(raw_i32.into_iter().map(|x| x as i8).collect()),
-                DataType::I16 => ColumnData::I16(raw_i32.into_iter().map(|x| x as i16).collect()),
-                DataType::U8 => ColumnData::U8(raw_i32.into_iter().map(|x| x as u8).collect()),
-                DataType::U16 => ColumnData::U16(raw_i32.into_iter().map(|x| x as u16).collect()),
-                _ => ColumnData::I32(raw_i32),
-            };
-            LogicalColumn::NullablePrim { present, values }
-        }
-        LogicalType::NullableUtf8 => {
-            let present = present_buf.remove(name).unwrap_or_default();
-            let strings = utf8_buf.remove(name).unwrap_or_default();
-            LogicalColumn::NullableUtf8 { present, strings }
-        }
-        LogicalType::NullableBinary => {
-            let present = present_buf.remove(name).unwrap_or_default();
-            let blobs = bin_buf.remove(name).unwrap_or_default();
-            LogicalColumn::NullableBinary { present, blobs }
-        }
         _ => LogicalColumn::Utf8(vec![]),
     }
 }
@@ -776,7 +721,7 @@ fn lz4_compress(data: &[u8]) -> Vec<u8> {
 ///
 /// - Primitive: little-endian native bytes, no framing.
 /// - Utf8/Binary: for each value, 4-byte LE length followed by content bytes.
-/// - NullablePrim / NullableUtf8 / NullableBinary: 1 byte per row present mask
+/// - Nullable: 1 byte per row present mask
 ///   (0x00/0x01) followed by the compacted non-null values.
 /// - Nested types (Struct/List/Map/Union/Dict): skipped with a note; the
 ///   function logs which columns were omitted.
@@ -804,31 +749,6 @@ fn append_lc_raw(out: &mut Vec<u8>, lc: &LogicalColumn) {
             }
         }
         LogicalColumn::Binary(blobs) => {
-            for b in blobs {
-                out.extend_from_slice(&(b.len() as u32).to_le_bytes());
-                out.extend_from_slice(b);
-            }
-        }
-        LogicalColumn::NullablePrim { present, values } => {
-            for &p in present {
-                out.push(p as u8);
-            }
-            append_cd_raw(out, values);
-        }
-        LogicalColumn::NullableUtf8 { present, strings } => {
-            for &p in present {
-                out.push(p as u8);
-            }
-            for s in strings {
-                let b = s.as_bytes();
-                out.extend_from_slice(&(b.len() as u32).to_le_bytes());
-                out.extend_from_slice(b);
-            }
-        }
-        LogicalColumn::NullableBinary { present, blobs } => {
-            for &p in present {
-                out.push(p as u8);
-            }
             for b in blobs {
                 out.extend_from_slice(&(b.len() as u32).to_le_bytes());
                 out.extend_from_slice(b);
@@ -1061,29 +981,6 @@ fn helium_lt_to_pq_field(
                     .expect("pq nullable binary field"),
             )
         }
-        LogicalType::NullablePrim { data_type } => {
-            let (phys, conv) = dt_to_pq(*data_type);
-            Arc::new(
-                parquet::schema::types::Type::primitive_type_builder(name, phys)
-                    .with_repetition(Repetition::OPTIONAL)
-                    .with_converted_type(conv)
-                    .build()
-                    .expect("pq nullable prim (legacy flat)"),
-            )
-        }
-        LogicalType::NullableUtf8 => Arc::new(
-            parquet::schema::types::Type::primitive_type_builder(name, PqPhysical::BYTE_ARRAY)
-                .with_repetition(Repetition::OPTIONAL)
-                .with_converted_type(ConvertedType::UTF8)
-                .build()
-                .expect("pq nullable utf8 (legacy flat)"),
-        ),
-        LogicalType::NullableBinary => Arc::new(
-            parquet::schema::types::Type::primitive_type_builder(name, PqPhysical::BYTE_ARRAY)
-                .with_repetition(Repetition::OPTIONAL)
-                .build()
-                .expect("pq nullable binary (legacy flat)"),
-        ),
         _ => {
             // Flat schema should not have nested types
             Arc::new(
@@ -1172,30 +1069,6 @@ fn write_pq_col(
                     );
                 }
             }
-        }
-
-        // ---- legacy flat NullablePrim ----
-        (LogicalType::NullablePrim { .. }, LogicalColumn::NullablePrim { present, values }) => {
-            let def: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
-            write_pq_cd(cw, values, Some(&def));
-        }
-
-        // ---- legacy flat NullableUtf8 ----
-        (LogicalType::NullableUtf8, LogicalColumn::NullableUtf8 { present, strings }) => {
-            let def: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
-            let expanded = expand_nullable_ba(present, strings, |s| ByteArray::from(s.as_bytes()));
-            cw.typed::<ByteArrayType>()
-                .write_batch(&expanded, Some(&def), None)
-                .expect("nullable utf8 (legacy flat) write");
-        }
-
-        // ---- legacy flat NullableBinary ----
-        (LogicalType::NullableBinary, LogicalColumn::NullableBinary { present, blobs }) => {
-            let def: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
-            let expanded = expand_nullable_ba(present, blobs, |b| ByteArray::from(b.as_slice()));
-            cw.typed::<ByteArrayType>()
-                .write_batch(&expanded, Some(&def), None)
-                .expect("nullable binary (legacy flat) write");
         }
 
         (lt, lc) => {
@@ -1310,7 +1183,8 @@ where
     out
 }
 
-/// Like `expand_nullable_ba` but for compact (non-null-only) slices.
+/// Expand compact (non-null-only) slices to full row count for parquet writing,
+/// inserting a default ByteArray at each null position.
 fn expand_compact_ba<T, F>(present: &[bool], compact: &[T], to_ba: F) -> Vec<ByteArray>
 where
     F: Fn(&T) -> ByteArray,
@@ -1333,11 +1207,6 @@ fn lc_variant_name(lc: &LogicalColumn) -> &'static str {
         LogicalColumn::Primitive(_) => "Primitive",
         LogicalColumn::Utf8(_) => "Utf8",
         LogicalColumn::Binary(_) => "Binary",
-        LogicalColumn::ArrayOf { .. } => "ArrayOf",
-        LogicalColumn::ArrayOfUtf8 { .. } => "ArrayOfUtf8",
-        LogicalColumn::NullablePrim { .. } => "NullablePrim",
-        LogicalColumn::NullableUtf8 { .. } => "NullableUtf8",
-        LogicalColumn::NullableBinary { .. } => "NullableBinary",
         LogicalColumn::Dictionary { .. } => "Dictionary",
         LogicalColumn::Struct { .. } => "Struct",
         LogicalColumn::List { .. } => "List",
@@ -1349,23 +1218,6 @@ fn lc_variant_name(lc: &LogicalColumn) -> &'static str {
         LogicalColumn::Date64 { .. } => "Date64",
         LogicalColumn::Datetime { .. } => "Datetime",
     }
-}
-
-fn expand_nullable_ba<T, F>(present: &[bool], values: &[T], to_ba: F) -> Vec<ByteArray>
-where
-    F: Fn(&T) -> ByteArray,
-{
-    let mut out = Vec::with_capacity(present.len());
-    let mut idx = 0usize;
-    for &p in present {
-        if p {
-            out.push(to_ba(&values[idx]));
-            idx += 1;
-        } else {
-            out.push(ByteArray::default());
-        }
-    }
-    out
 }
 
 fn write_pq_cd(
@@ -1513,9 +1365,6 @@ fn lt_to_avro_type_str(lt: &LogicalType) -> Option<String> {
             let inner_str = lt_to_avro_type_str(inner)?;
             Some(format!(r#"["null",{}]"#, inner_str))
         }
-        LogicalType::NullablePrim { .. } => Some(r#"["null","int"]"#.into()),
-        LogicalType::NullableUtf8 => Some(r#"["null","string"]"#.into()),
-        LogicalType::NullableBinary => Some(r#"["null","bytes"]"#.into()),
         _ => None,
     }
 }
@@ -1559,54 +1408,6 @@ fn lc_row_to_avro_value(
                 ),
                 _ => AvroVal::Null,
             }
-        }
-        // legacy flat NullablePrim (legacy synthetic data path)
-        (LogicalType::Nullable { inner }, LogicalColumn::NullablePrim { present, values }) => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return AvroVal::Union(0, Box::new(AvroVal::Null));
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            let inner_dt = match inner.as_ref() {
-                LogicalType::Primitive { data_type } => *data_type,
-                _ => DataType::I32,
-            };
-            AvroVal::Union(1, Box::new(cd_row_to_avro(values, inner_dt, idx)))
-        }
-        (LogicalType::Nullable { inner }, LogicalColumn::NullableUtf8 { present, strings })
-            if matches!(inner.as_ref(), LogicalType::Utf8) =>
-        {
-            if !present.get(row).copied().unwrap_or(false) {
-                return AvroVal::Union(0, Box::new(AvroVal::Null));
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            AvroVal::Union(
-                1,
-                Box::new(AvroVal::String(
-                    strings.get(idx).cloned().unwrap_or_default(),
-                )),
-            )
-        }
-        (
-            LogicalType::NullablePrim { data_type },
-            LogicalColumn::NullablePrim { present, values },
-        ) => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return AvroVal::Union(0, Box::new(AvroVal::Null));
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            AvroVal::Union(1, Box::new(cd_row_to_avro(values, *data_type, idx)))
-        }
-        (LogicalType::NullableUtf8, LogicalColumn::NullableUtf8 { present, strings }) => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return AvroVal::Union(0, Box::new(AvroVal::Null));
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            AvroVal::Union(
-                1,
-                Box::new(AvroVal::String(
-                    strings.get(idx).cloned().unwrap_or_default(),
-                )),
-            )
         }
         _ => AvroVal::Null,
     }

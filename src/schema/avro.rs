@@ -1354,101 +1354,6 @@ fn avro_values_to_logical_column(
         }
 
         // ----------------------------------------------------------------
-        // Legacy flat nullable variants
-        // ----------------------------------------------------------------
-        LogicalType::NullablePrim { data_type } => {
-            let mut present = Vec::with_capacity(values.len());
-            let mut non_null: Vec<&AV> = Vec::new();
-            for val in values {
-                let is_null = matches!(val, AV::Null)
-                    || matches!(val, AV::Union(_, iv) if matches!(iv.as_ref(), AV::Null));
-                if is_null {
-                    present.push(false);
-                } else if let AV::Union(_, iv) = val {
-                    present.push(true);
-                    non_null.push(iv.as_ref());
-                } else {
-                    present.push(true);
-                    non_null.push(val);
-                }
-            }
-            let inner_lt = LogicalType::Primitive {
-                data_type: *data_type,
-            };
-            let lc = avro_values_to_logical_column(&non_null, &inner_lt)?;
-            let cd = match lc {
-                LogicalColumn::Primitive(cd) => cd,
-                _ => unreachable!(),
-            };
-            Ok(LogicalColumn::NullablePrim {
-                present,
-                values: cd,
-            })
-        }
-        LogicalType::NullableUtf8 => {
-            let mut present = Vec::with_capacity(values.len());
-            let mut non_null: Vec<&AV> = Vec::new();
-            for val in values {
-                let is_null = matches!(val, AV::Null)
-                    || matches!(val, AV::Union(_, iv) if matches!(iv.as_ref(), AV::Null));
-                if is_null {
-                    present.push(false);
-                } else if let AV::Union(_, iv) = val {
-                    present.push(true);
-                    non_null.push(iv.as_ref());
-                } else {
-                    present.push(true);
-                    non_null.push(val);
-                }
-            }
-            let strings: Vec<String> = non_null
-                .iter()
-                .enumerate()
-                .map(|(i, v)| avro_to_string(v, i))
-                .collect::<Result<_>>()?;
-            Ok(LogicalColumn::NullableUtf8 { present, strings })
-        }
-        LogicalType::NullableBinary => {
-            let mut present = Vec::with_capacity(values.len());
-            let mut non_null: Vec<&AV> = Vec::new();
-            for val in values {
-                let is_null = matches!(val, AV::Null)
-                    || matches!(val, AV::Union(_, iv) if matches!(iv.as_ref(), AV::Null));
-                if is_null {
-                    present.push(false);
-                } else if let AV::Union(_, iv) = val {
-                    present.push(true);
-                    non_null.push(iv.as_ref());
-                } else {
-                    present.push(true);
-                    non_null.push(val);
-                }
-            }
-            let blobs: Vec<Vec<u8>> = non_null
-                .iter()
-                .enumerate()
-                .map(|(i, v)| avro_to_bytes(v, i))
-                .collect::<Result<_>>()?;
-            Ok(LogicalColumn::NullableBinary { present, blobs })
-        }
-        LogicalType::ArrayOf { data_type } => {
-            let inner_lt = LogicalType::Primitive {
-                data_type: *data_type,
-            };
-            avro_values_to_logical_column(
-                values,
-                &LogicalType::List {
-                    inner: Box::new(inner_lt),
-                },
-            )
-        }
-        LogicalType::ArrayOfUtf8 => avro_values_to_logical_column(
-            values,
-            &LogicalType::List {
-                inner: Box::new(LogicalType::Utf8),
-            },
-        ),
-        // ----------------------------------------------------------------
         // Semantic types
         // ----------------------------------------------------------------
         LogicalType::Decimal128 { .. } => {
@@ -1596,12 +1501,7 @@ fn pick_union_variant_by_shape(
                 | (LogicalType::Utf8, AV::String(_) | AV::Enum(_, _))
                 | (LogicalType::Binary, AV::Bytes(_) | AV::Fixed(_, _))
                 | (LogicalType::Struct { .. }, AV::Record(_))
-                | (
-                    LogicalType::List { .. }
-                        | LogicalType::ArrayOf { .. }
-                        | LogicalType::ArrayOfUtf8,
-                    AV::Array(_),
-                )
+                | (LogicalType::List { .. }, AV::Array(_))
                 | (LogicalType::Map { .. }, AV::Map(_))
         )
     };
@@ -1832,19 +1732,6 @@ fn helium_lt_to_avro_json(lt: &LogicalType, context: &str) -> Result<serde_json:
             }
             Ok(serde_json::Value::Array(union_types))
         }
-        LogicalType::NullablePrim { data_type } => {
-            let inner =
-                serde_json::Value::String(helium_dt_to_avro_type_name(*data_type).to_string());
-            Ok(serde_json::json!(["null", inner]))
-        }
-        LogicalType::NullableUtf8 => Ok(serde_json::json!(["null", "string"])),
-        LogicalType::NullableBinary => Ok(serde_json::json!(["null", "bytes"])),
-        LogicalType::ArrayOf { data_type } => {
-            let items =
-                serde_json::Value::String(helium_dt_to_avro_type_name(*data_type).to_string());
-            Ok(serde_json::json!({ "type": "array", "items": items }))
-        }
-        LogicalType::ArrayOfUtf8 => Ok(serde_json::json!({ "type": "array", "items": "string" })),
         // Dictionary{inner} — serialize as the inner type (expand on Avro round-trip).
         LogicalType::Dictionary { inner } => helium_lt_to_avro_json(inner, context),
 
@@ -1987,55 +1874,6 @@ fn logical_column_to_avro_value(
             let inner_val = logical_column_to_avro_value(variant_lc, vlt, compact)?;
             Ok(AV::Union(tag as u32, Box::new(inner_val)))
         }
-        (
-            LogicalColumn::NullablePrim { present, values },
-            LogicalType::NullablePrim { data_type },
-        ) => {
-            let compact = present[..row_idx].iter().filter(|&&p| p).count();
-            if present.get(row_idx).copied().unwrap_or(false) {
-                Ok(AV::Union(
-                    1,
-                    Box::new(column_data_row_to_avro(values, *data_type, compact)),
-                ))
-            } else {
-                Ok(AV::Union(0, Box::new(AV::Null)))
-            }
-        }
-        (LogicalColumn::NullableUtf8 { present, strings }, LogicalType::NullableUtf8) => {
-            let compact = present[..row_idx].iter().filter(|&&p| p).count();
-            if present.get(row_idx).copied().unwrap_or(false) {
-                let s = strings.get(compact).cloned().unwrap_or_default();
-                Ok(AV::Union(1, Box::new(AV::String(s))))
-            } else {
-                Ok(AV::Union(0, Box::new(AV::Null)))
-            }
-        }
-        (LogicalColumn::NullableBinary { present, blobs }, LogicalType::NullableBinary) => {
-            let compact = present[..row_idx].iter().filter(|&&p| p).count();
-            if present.get(row_idx).copied().unwrap_or(false) {
-                let b = blobs.get(compact).cloned().unwrap_or_default();
-                Ok(AV::Union(1, Box::new(AV::Bytes(b))))
-            } else {
-                Ok(AV::Union(0, Box::new(AV::Null)))
-            }
-        }
-        (LogicalColumn::ArrayOf { offsets, values }, LogicalType::ArrayOf { data_type }) => {
-            let start = offsets.get(row_idx).copied().unwrap_or(0) as usize;
-            let end = offsets.get(row_idx + 1).copied().unwrap_or(start as u32) as usize;
-            let items: Vec<AV> = (start..end)
-                .map(|item_idx| column_data_row_to_avro(values, *data_type, item_idx))
-                .collect();
-            Ok(AV::Array(items))
-        }
-        (LogicalColumn::ArrayOfUtf8 { offsets, strings }, LogicalType::ArrayOfUtf8) => {
-            let start = offsets.get(row_idx).copied().unwrap_or(0) as usize;
-            let end = offsets.get(row_idx + 1).copied().unwrap_or(start as u32) as usize;
-            let items: Vec<AV> = strings[start..end]
-                .iter()
-                .map(|s| AV::String(s.clone()))
-                .collect();
-            Ok(AV::Array(items))
-        }
         // Semantic types
         (LogicalColumn::Decimal128 { values }, LogicalType::Decimal128 { .. }) => {
             // Represent as Avro Bytes (big-endian two's-complement i128).
@@ -2129,13 +1967,9 @@ fn logical_column_row_count(lc: &LogicalColumn) -> usize {
         },
         LogicalColumn::Utf8(v) => v.len(),
         LogicalColumn::Binary(v) => v.len(),
-        LogicalColumn::NullablePrim { present, .. } => present.len(),
-        LogicalColumn::NullableUtf8 { present, .. } => present.len(),
-        LogicalColumn::NullableBinary { present, .. } => present.len(),
-        LogicalColumn::ArrayOf { offsets, .. }
-        | LogicalColumn::ArrayOfUtf8 { offsets, .. }
-        | LogicalColumn::List { offsets, .. }
-        | LogicalColumn::Map { offsets, .. } => offsets.len().saturating_sub(1),
+        LogicalColumn::List { offsets, .. } | LogicalColumn::Map { offsets, .. } => {
+            offsets.len().saturating_sub(1)
+        }
         LogicalColumn::Dictionary { indices, .. } => indices.len(),
         LogicalColumn::Nullable { present, .. } => present.len(),
         LogicalColumn::Struct { fields } => fields

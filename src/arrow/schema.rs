@@ -31,13 +31,7 @@ pub fn schema_to_arrow(schema: &Schema) -> ArrowSchema {
         .iter()
         .map(|col| {
             let dt = logical_type_to_arrow(&col.logical_type);
-            let nullable = matches!(
-                col.logical_type,
-                LogicalType::Nullable { .. }
-                    | LogicalType::NullablePrim { .. }
-                    | LogicalType::NullableUtf8
-                    | LogicalType::NullableBinary
-            );
+            let nullable = matches!(col.logical_type, LogicalType::Nullable { .. });
             ArrowField::new(col.name.clone(), dt, nullable)
         })
         .collect();
@@ -71,18 +65,6 @@ pub fn logical_type_to_arrow(lt: &LogicalType) -> ArrowDataType {
         LogicalType::Utf8 => ArrowDataType::Utf8,
         LogicalType::Binary => ArrowDataType::Binary,
 
-        // legacy flat variants mapped to recursive equivalents
-        LogicalType::ArrayOf { data_type } => {
-            let inner_dt = helium_data_type_to_arrow(*data_type);
-            ArrowDataType::List(Arc::new(ArrowField::new("item", inner_dt, true)))
-        }
-        LogicalType::ArrayOfUtf8 => {
-            ArrowDataType::List(Arc::new(ArrowField::new("item", ArrowDataType::Utf8, true)))
-        }
-        LogicalType::NullablePrim { data_type } => helium_data_type_to_arrow(*data_type),
-        LogicalType::NullableUtf8 => ArrowDataType::Utf8,
-        LogicalType::NullableBinary => ArrowDataType::Binary,
-
         // recursive Dictionary{inner}
         LogicalType::Dictionary { inner } => ArrowDataType::Dictionary(
             Box::new(ArrowDataType::UInt32),
@@ -95,13 +77,7 @@ pub fn logical_type_to_arrow(lt: &LogicalType) -> ArrowDataType {
                 .iter()
                 .map(|f| {
                     let dt = logical_type_to_arrow(&f.logical_type);
-                    let nullable = matches!(
-                        f.logical_type,
-                        LogicalType::Nullable { .. }
-                            | LogicalType::NullablePrim { .. }
-                            | LogicalType::NullableUtf8
-                            | LogicalType::NullableBinary
-                    );
+                    let nullable = matches!(f.logical_type, LogicalType::Nullable { .. });
                     ArrowField::new(f.name.clone(), dt, nullable)
                 })
                 .collect();
@@ -120,13 +96,7 @@ pub fn logical_type_to_arrow(lt: &LogicalType) -> ArrowDataType {
         LogicalType::Map { key, value } => {
             let key_dt = logical_type_to_arrow(key);
             let val_dt = logical_type_to_arrow(value);
-            let val_nullable = matches!(
-                value.as_ref(),
-                LogicalType::Nullable { .. }
-                    | LogicalType::NullablePrim { .. }
-                    | LogicalType::NullableUtf8
-                    | LogicalType::NullableBinary
-            );
+            let val_nullable = matches!(value.as_ref(), LogicalType::Nullable { .. });
             let struct_fields = Fields::from(vec![
                 ArrowField::new("key", key_dt, false),
                 ArrowField::new("value", val_dt, val_nullable),

@@ -10,7 +10,7 @@
 //! 7. Error: `--to avsc` (Avro export not supported)
 //! 8. `--from` / `--to` override extension (data.txt with `--from csv`)
 //! 9. Parquet with OPTIONAL columns → he (regression: production loader
-//!    must produce recursive-shaped LogicalColumn::Nullable, not legacy flat NullablePrim)
+//!    must produce recursive-shaped LogicalColumn::Nullable)
 #![cfg(feature = "cli")]
 
 use std::fs;
@@ -392,9 +392,9 @@ fn flag_overrides_extension() {
 //
 // The production loader (`src/cli/loader.rs::strings_to_logical_column`) must
 // produce recursive-shaped `LogicalColumn::Nullable { present, value: Box::new(...) }`
-// when the inferred schema is the recursive `Nullable { inner }`. Previously it emitted
-// legacy-flat-shaped `NullablePrim` / `NullableUtf8` / `NullableBinary`, which the
-// writer rejects with "logical column shape does not match schema". Real-world
+// when the inferred schema is the recursive `Nullable { inner }`. A mismatched
+// column shape is rejected by the writer with "logical column shape does not
+// match schema". Real-world
 // Parquet inputs (e.g. ClickBench's hits_1.parquet) use OPTIONAL columns
 // extensively, so this path needs explicit coverage.
 

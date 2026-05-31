@@ -71,8 +71,7 @@ of that gap is now closed; what landed and what remains:
 - **One reader held open — done.** The reader is opened once per scan and held
   across stripes (in the init data), instead of re-opening the file per stripe.
 - **Nested types — done.** `Struct`, `List`, and `Map` map onto DuckDB
-  STRUCT / LIST / MAP vectors. `Union` and the legacy flat `ArrayOf` / `ArrayOfUtf8`
-  legacy variants still error at bind time with a clear message.
+  STRUCT / LIST / MAP vectors. `Union` errors at bind time with a clear message.
 - **Catalog-mode support — done.** `read_he(path, catalog := '…')` resolves the
   schema through `HeliumReader::new_with_resolver`; a catalog-mode file without
   the parameter errors with the documented resolver message.

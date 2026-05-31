@@ -34,11 +34,8 @@ use crate::core::schema::{FieldSpec, LogicalColumn, LogicalType};
 /// # Inverse direction note
 ///
 /// The returned `LogicalColumn` is always recursive-shaped:
-/// - `Nullable { present, value }` (never `NullablePrim`/`NullableUtf8`)
-/// - `List { offsets, values }` (never `ArrayOf`/`ArrayOfUtf8`)
-///
-/// Legacy flat variants round-tripped through Arrow will be returned as their
-/// equivalent recursive shapes.
+/// - `Nullable { present, value }`
+/// - `List { offsets, values }`
 pub fn from_arrow_array(array: &ArrayRef, hint: &LogicalType) -> Result<LogicalColumn> {
     from_arrow_inner(array, hint)
 }
@@ -47,24 +44,8 @@ fn from_arrow_inner(array: &ArrayRef, hint: &LogicalType) -> Result<LogicalColum
     // Check if the array has nulls; if so, wrap in Nullable
     // UNLESS the hint is already Nullable (then extract present from the
     // null buffer and delegate to the inner type).
-    match hint {
-        LogicalType::Nullable { inner } => {
-            return from_arrow_nullable(array, inner);
-        }
-        // legacy flat compatibility hints: map to recursive forms
-        LogicalType::NullablePrim { data_type } => {
-            let inner_lt = LogicalType::Primitive {
-                data_type: *data_type,
-            };
-            return from_arrow_nullable(array, &inner_lt);
-        }
-        LogicalType::NullableUtf8 => {
-            return from_arrow_nullable(array, &LogicalType::Utf8);
-        }
-        LogicalType::NullableBinary => {
-            return from_arrow_nullable(array, &LogicalType::Binary);
-        }
-        _ => {}
+    if let LogicalType::Nullable { inner } = hint {
+        return from_arrow_nullable(array, inner);
     }
 
     // Non-nullable types: if the Arrow array has nulls, we still extract
@@ -189,21 +170,9 @@ fn from_arrow_inner(array: &ArrayRef, hint: &LogicalType) -> Result<LogicalColum
         }
 
         // ------------------------------------------------------------------ //
-        // List and legacy flat ArrayOf / ArrayOfUtf8                                  //
+        // List                                                                //
         // ------------------------------------------------------------------ //
         (ArrowDataType::List(_), LogicalType::List { inner }) => from_arrow_list(array, inner),
-        (ArrowDataType::List(_), LogicalType::ArrayOf { data_type }) => {
-            let inner_lt = LogicalType::Primitive {
-                data_type: *data_type,
-            };
-            let result = from_arrow_list(array, &inner_lt)?;
-            // Return as recursive List (per spec: inverse always returns the recursive form)
-            Ok(result)
-        }
-        (ArrowDataType::List(_), LogicalType::ArrayOfUtf8) => {
-            let inner_lt = LogicalType::Utf8;
-            from_arrow_list(array, &inner_lt)
-        }
 
         // ------------------------------------------------------------------ //
         // Map                                                                 //
@@ -1062,36 +1031,6 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------- //
-    // 9. Legacy flat variants roundtrip → recursive shape                     //
-    // ---------------------------------------------------------------------- //
-
-    #[test]
-    fn legacy_nullable_prim_to_arrow_then_back_recursive() {
-        // NullablePrim is a legacy flat variant. to_arrow converts it to an Arrow
-        // Int64Array with nulls. from_arrow with a Nullable hint returns the recursive form.
-        let col = LogicalColumn::NullablePrim {
-            present: vec![true, false, true],
-            values: ColumnData::I64(vec![42, 99]),
-        };
-        let lt = LogicalType::NullablePrim {
-            data_type: HDataType::I64,
-        };
-        let arr = to_arrow_array(&col, &lt).unwrap();
-        // Round-trip through Arrow with the Nullable<Primitive> recursive hint
-        let recursive_lt = LogicalType::Nullable {
-            inner: Box::new(LogicalType::Primitive {
-                data_type: HDataType::I64,
-            }),
-        };
-        let back = from_arrow_array(&arr, &recursive_lt).unwrap();
-        let expected = LogicalColumn::Nullable {
-            present: vec![true, false, true],
-            value: Box::new(LogicalColumn::Primitive(ColumnData::I64(vec![42, 99]))),
-        };
-        assert_eq!(back, expected);
-    }
-
-    // ---------------------------------------------------------------------- //
     // 9b. Nullable<List<Struct>> — demanding composition                    //
     // ---------------------------------------------------------------------- //
 
@@ -1140,30 +1079,5 @@ mod tests {
         assert_eq!(arr.null_count(), 1);
         let back = from_arrow_array(&arr, &lt).unwrap();
         assert_eq!(back, col);
-    }
-
-    #[test]
-    fn legacy_array_of_to_arrow_then_back_recursive_list() {
-        // ArrayOf is a legacy flat variant mapping to Arrow List<Int32>.
-        // Back-conversion with the List hint returns the recursive form.
-        let col = LogicalColumn::ArrayOf {
-            offsets: vec![0, 2, 3],
-            values: ColumnData::I32(vec![1, 2, 3]),
-        };
-        let lt = LogicalType::ArrayOf {
-            data_type: HDataType::I32,
-        };
-        let arr = to_arrow_array(&col, &lt).unwrap();
-        let recursive_lt = LogicalType::List {
-            inner: Box::new(LogicalType::Primitive {
-                data_type: HDataType::I32,
-            }),
-        };
-        let back = from_arrow_array(&arr, &recursive_lt).unwrap();
-        let expected = LogicalColumn::List {
-            offsets: vec![0, 2, 3],
-            values: Box::new(LogicalColumn::Primitive(ColumnData::I32(vec![1, 2, 3]))),
-        };
-        assert_eq!(back, expected);
     }
 }

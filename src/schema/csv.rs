@@ -543,7 +543,7 @@ fn push_simple<'a>(
 /// - **Struct**: flattened to dotted sub-columns (`addr.street`, `addr.zip`).
 ///   Nested structs concatenate: `user.addr.street` etc. See
 ///   [`write_csv_with_options`] for the full flattening rules.
-/// - **List / Map / Union** (and legacy flat `ArrayOf`, `ArrayOfUtf8`): serialised as a
+/// - **List / Map / Union**: serialised as a
 ///   compact JSON string. This is a lossy representation — it round-trips
 ///   through JSON, not back through Helium's type system.
 ///
@@ -661,27 +661,6 @@ fn format_cell(lc: &LogicalColumn, row: usize) -> String {
             let compacted_idx = present[..row].iter().filter(|&&p| p).count();
             format_cell(value, compacted_idx)
         }
-        LogicalColumn::NullablePrim { present, values } => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return String::new();
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            format_column_data_cell(values, idx)
-        }
-        LogicalColumn::NullableUtf8 { present, strings } => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return String::new();
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            strings.get(idx).cloned().unwrap_or_default()
-        }
-        LogicalColumn::NullableBinary { present, blobs } => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return String::new();
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            blobs.get(idx).map(|b| hex_encode(b)).unwrap_or_default()
-        }
         // Semantic types — render as human-readable strings.
         LogicalColumn::Decimal128 { values } => values
             .get(row)
@@ -711,9 +690,7 @@ fn format_cell(lc: &LogicalColumn, row: usize) -> String {
         LogicalColumn::Struct { .. }
         | LogicalColumn::List { .. }
         | LogicalColumn::Map { .. }
-        | LogicalColumn::Union { .. }
-        | LogicalColumn::ArrayOf { .. }
-        | LogicalColumn::ArrayOfUtf8 { .. } => logical_column_row_to_json(lc, row)
+        | LogicalColumn::Union { .. } => logical_column_row_to_json(lc, row)
             .map(|v| v.to_string())
             .unwrap_or_default(),
     }
@@ -877,44 +854,6 @@ fn logical_column_row_to_json(lc: &LogicalColumn, row: usize) -> Option<serde_js
             let val = logical_column_row_to_json(vcol, vrow).unwrap_or(Value::Null);
             Some(json!({ vname.as_str(): val }))
         }
-        LogicalColumn::ArrayOf { offsets, values } => {
-            let start = *offsets.get(row)? as usize;
-            let end = *offsets.get(row + 1)? as usize;
-            let arr: Vec<Value> = (start..end)
-                .map(|i| column_data_row_to_json(values, i))
-                .collect();
-            Some(Value::Array(arr))
-        }
-        LogicalColumn::ArrayOfUtf8 { offsets, strings } => {
-            let start = *offsets.get(row)? as usize;
-            let end = *offsets.get(row + 1)? as usize;
-            let arr: Vec<Value> = strings[start..end.min(strings.len())]
-                .iter()
-                .map(|s| Value::String(s.clone()))
-                .collect();
-            Some(Value::Array(arr))
-        }
-        LogicalColumn::NullablePrim { present, values } => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return Some(Value::Null);
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            Some(column_data_row_to_json(values, idx))
-        }
-        LogicalColumn::NullableUtf8 { present, strings } => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return Some(Value::Null);
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            strings.get(idx).map(|s| Value::String(s.clone()))
-        }
-        LogicalColumn::NullableBinary { present, blobs } => {
-            if !present.get(row).copied().unwrap_or(false) {
-                return Some(Value::Null);
-            }
-            let idx = present[..row].iter().filter(|&&p| p).count();
-            blobs.get(idx).map(|b| Value::String(hex_encode(b)))
-        }
         // Dictionary{inner}: look up the dictionary entry for this row's index.
         LogicalColumn::Dictionary {
             dictionary,
@@ -1071,9 +1010,9 @@ mod tests {
         let mut cols: HashMap<String, LogicalColumn> = HashMap::new();
         cols.insert(
             "x".to_string(),
-            LogicalColumn::NullablePrim {
+            LogicalColumn::Nullable {
                 present: vec![true, false, true],
-                values: ColumnData::I32(vec![10, 30]),
+                value: Box::new(LogicalColumn::Primitive(ColumnData::I32(vec![10, 30]))),
             },
         );
 

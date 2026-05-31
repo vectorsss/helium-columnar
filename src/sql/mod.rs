@@ -479,8 +479,6 @@ fn build_column_statistics(
     let (data_leaf_idx, null_count_leaf_idx): (usize, Option<usize>) = match logical_type {
         LogicalType::Primitive { .. } => (0, None),
         LogicalType::Utf8 | LogicalType::Binary => (1, None),
-        LogicalType::NullablePrim { .. } => (1, Some(0)),
-        LogicalType::NullableUtf8 | LogicalType::NullableBinary => (2, Some(0)),
         LogicalType::Nullable { inner } => match inner.as_ref() {
             LogicalType::Primitive { .. } => (1, Some(0)),
             LogicalType::Utf8 | LogicalType::Binary => (2, Some(0)),

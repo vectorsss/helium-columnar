@@ -126,8 +126,18 @@ fn flat_schema() -> Schema {
         ColumnSpec::primitive("user_id", DataType::I64, delta_leb_zstd()),
         ColumnSpec::utf8("level", delta_leb_zstd(), zstd_only()),
         ColumnSpec::utf8("message", delta_leb_zstd(), zstd_only()),
-        ColumnSpec::nullable_prim("score", DataType::F64, present_coders(), f64_coders()),
-        ColumnSpec::array_of_utf8("tags", delta_leb_zstd(), delta_leb_zstd(), zstd_only()),
+        ColumnSpec::nullable(
+            "score",
+            LogicalType::Primitive {
+                data_type: DataType::F64,
+            },
+            vec![present_coders(), f64_coders()],
+        ),
+        ColumnSpec::list(
+            "tags",
+            LogicalType::Utf8,
+            vec![delta_leb_zstd(), delta_leb_zstd(), zstd_only()],
+        ),
     ])
 }
 
@@ -179,17 +189,19 @@ fn write_flat(data: &LogData) -> Vec<u8> {
         .expect("message");
     w.write_column(
         "score",
-        LogicalColumn::NullablePrim {
+        LogicalColumn::Nullable {
             present: data.score_present.clone(),
-            values: ColumnData::F64(data.score_values.clone()),
+            value: Box::new(LogicalColumn::Primitive(ColumnData::F64(
+                data.score_values.clone(),
+            ))),
         },
     )
     .expect("score");
     w.write_column(
         "tags",
-        LogicalColumn::ArrayOfUtf8 {
+        LogicalColumn::List {
             offsets: data.tag_offsets.clone(),
-            strings: data.tag_strings.clone(),
+            values: Box::new(LogicalColumn::Utf8(data.tag_strings.clone())),
         },
     )
     .expect("tags");

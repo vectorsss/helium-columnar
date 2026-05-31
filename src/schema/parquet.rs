@@ -687,37 +687,6 @@ fn write_parquet_column(
                 }),
             }
         }
-        // ── legacy flat compat: NullablePrim ────────────────────────────────────────
-        (LogicalType::NullablePrim { .. }, LogicalColumn::NullablePrim { present, values }) => {
-            let def_levels: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
-            write_column_data(col, values, Some(&def_levels), col_name)
-        }
-        // ── legacy flat compat: NullableUtf8 ───────────────────────────────────────
-        (LogicalType::NullableUtf8, LogicalColumn::NullableUtf8 { present, strings }) => {
-            let def_levels: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
-            let data: Vec<ByteArray> = strings
-                .iter()
-                .map(|s| ByteArray::from(s.as_bytes()))
-                .collect();
-            col.typed::<ByteArrayType>()
-                .write_batch(&data, Some(&def_levels), None)
-                .map(|_| ())
-                .map_err(|e| HeliumError::Format(format!("Parquet NullableUtf8 write error: {e}")))
-        }
-        // ── legacy flat compat: NullableBinary ─────────────────────────────────────
-        (LogicalType::NullableBinary, LogicalColumn::NullableBinary { present, blobs }) => {
-            let def_levels: Vec<i16> = present.iter().map(|&p| if p { 1 } else { 0 }).collect();
-            let data: Vec<ByteArray> = blobs
-                .iter()
-                .map(|b| ByteArray::from(b.as_slice()))
-                .collect();
-            col.typed::<ByteArrayType>()
-                .write_batch(&data, Some(&def_levels), None)
-                .map(|_| ())
-                .map_err(|e| {
-                    HeliumError::Format(format!("Parquet NullableBinary write error: {e}"))
-                })
-        }
         // ── Unsupported nested types ───────────────────────────────────────
         (lt, _) => Err(HeliumError::Schema {
             column: col_name.to_string(),
@@ -898,39 +867,6 @@ fn helium_logical_type_to_parquet_field(
                 inner
             ),
         }),
-        // legacy flat NullablePrim.
-        LogicalType::NullablePrim { data_type } => {
-            let (phys, conv) = helium_dt_to_parquet_physical(*data_type);
-            let field = PqType::primitive_type_builder(name, phys)
-                .with_repetition(Repetition::OPTIONAL)
-                .with_converted_type(conv)
-                .build()
-                .map_err(|e| {
-                    HeliumError::Format(format!("Parquet NullablePrim field build error: {e}"))
-                })?;
-            Ok(Arc::new(field))
-        }
-        // legacy flat NullableUtf8.
-        LogicalType::NullableUtf8 => {
-            let field = PqType::primitive_type_builder(name, PqPhysical::BYTE_ARRAY)
-                .with_repetition(Repetition::OPTIONAL)
-                .with_converted_type(ConvertedType::UTF8)
-                .build()
-                .map_err(|e| {
-                    HeliumError::Format(format!("Parquet NullableUtf8 field build error: {e}"))
-                })?;
-            Ok(Arc::new(field))
-        }
-        // legacy flat NullableBinary.
-        LogicalType::NullableBinary => {
-            let field = PqType::primitive_type_builder(name, PqPhysical::BYTE_ARRAY)
-                .with_repetition(Repetition::OPTIONAL)
-                .build()
-                .map_err(|e| {
-                    HeliumError::Format(format!("Parquet NullableBinary field build error: {e}"))
-                })?;
-            Ok(Arc::new(field))
-        }
         // Unsupported nested types.
         other => Err(HeliumError::Schema {
             column: name.to_string(),

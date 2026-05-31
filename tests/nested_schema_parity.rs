@@ -140,8 +140,18 @@ fn flat_log_schema() -> Schema {
         ColumnSpec::primitive("user_id", DataType::I64, delta_leb_zstd()),
         ColumnSpec::utf8("level", delta_leb_zstd(), zstd_only()),
         ColumnSpec::utf8("message", delta_leb_zstd(), zstd_only()),
-        ColumnSpec::nullable_prim("score", DataType::F64, present_coders(), gorilla_zstd()),
-        ColumnSpec::array_of_utf8("tags", delta_leb_zstd(), delta_leb_zstd(), zstd_only()),
+        ColumnSpec::nullable(
+            "score",
+            LogicalType::Primitive {
+                data_type: DataType::F64,
+            },
+            vec![present_coders(), gorilla_zstd()],
+        ),
+        ColumnSpec::list(
+            "tags",
+            LogicalType::Utf8,
+            vec![delta_leb_zstd(), delta_leb_zstd(), zstd_only()],
+        ),
     ])
 }
 
@@ -185,16 +195,18 @@ fn write_flat_log(d: &LogData) -> Vec<u8> {
             ("message", LogicalColumn::Utf8(d.message.clone())),
             (
                 "score",
-                LogicalColumn::NullablePrim {
+                LogicalColumn::Nullable {
                     present: d.score_present.clone(),
-                    values: ColumnData::F64(d.score_values.clone()),
+                    value: Box::new(LogicalColumn::Primitive(ColumnData::F64(
+                        d.score_values.clone(),
+                    ))),
                 },
             ),
             (
                 "tags",
-                LogicalColumn::ArrayOfUtf8 {
+                LogicalColumn::List {
                     offsets: d.tag_offsets.clone(),
-                    strings: d.tag_strings.clone(),
+                    values: Box::new(LogicalColumn::Utf8(d.tag_strings.clone())),
                 },
             ),
         ],
@@ -247,8 +259,8 @@ fn write_recursive_log(d: &LogData) -> Vec<u8> {
 //   tx_id             → offsets(U32) + data(Bytes)           [Utf8]
 //   tx_amount         → offsets(U32) + data(Bytes)           [Binary]
 //   tx_currency       → offsets(U32) + data(Bytes)           [Utf8]
-//   tx_parent_id      → present(U8) + offsets(U32) + data(Bytes)  [NullableUtf8]
-//   tx_metadata       → outer_offsets(U32) + inner_offsets(U32) + data(Bytes) [ArrayOfUtf8]
+//   tx_parent_id      → present(U8) + item.offsets(U32) + item.data(Bytes)  [Nullable(Utf8)]
+//   tx_metadata       → offsets(U32) + item.offsets(U32) + item.data(Bytes) [List(Utf8)]
 //
 // Recursive (same 12 leaf physical fields, different role-name prefixes):
 //   tx.id             → offsets + data
@@ -330,17 +342,15 @@ fn flat_tx_schema() -> Schema {
         ColumnSpec::utf8("tx_id", delta_leb_zstd(), zstd_only()),
         ColumnSpec::binary("tx_amount", delta_leb_zstd(), zstd_only()),
         ColumnSpec::utf8("tx_currency", delta_leb_zstd(), zstd_only()),
-        ColumnSpec::nullable_utf8(
+        ColumnSpec::nullable(
             "tx_parent_id",
-            present_coders(),
-            delta_leb_zstd(),
-            zstd_only(),
+            LogicalType::Utf8,
+            vec![present_coders(), delta_leb_zstd(), zstd_only()],
         ),
-        ColumnSpec::array_of_utf8(
+        ColumnSpec::list(
             "tx_metadata",
-            delta_leb_zstd(),
-            delta_leb_zstd(),
-            zstd_only(),
+            LogicalType::Utf8,
+            vec![delta_leb_zstd(), delta_leb_zstd(), zstd_only()],
         ),
     ])
 }
@@ -381,16 +391,16 @@ fn write_flat_tx(d: &TxData) -> Vec<u8> {
             ("tx_currency", LogicalColumn::Utf8(d.currencies.clone())),
             (
                 "tx_parent_id",
-                LogicalColumn::NullableUtf8 {
+                LogicalColumn::Nullable {
                     present: d.parent_present.clone(),
-                    strings: d.parent_ids.clone(),
+                    value: Box::new(LogicalColumn::Utf8(d.parent_ids.clone())),
                 },
             ),
             (
                 "tx_metadata",
-                LogicalColumn::ArrayOfUtf8 {
+                LogicalColumn::List {
                     offsets: d.meta_offsets.clone(),
-                    strings: d.meta_strings.clone(),
+                    values: Box::new(LogicalColumn::Utf8(d.meta_strings.clone())),
                 },
             ),
         ],
@@ -434,17 +444,18 @@ fn write_recursive_tx(d: &TxData) -> Vec<u8> {
 //                   readings: List<Struct { key: Utf8, value: F64 }> }
 //
 // Key parity insight: Recursive List<Struct { k, v }> stores ONE shared outer-offsets
-// array covering both key and value fields.  The flat equivalent must use
-// ArrayOfUtf8 + ArrayOf(F64), each of which carries its own outer-offsets
-// column — so the flat form duplicates the outer offsets.  Expected result: recursive is
-// strictly smaller (negative overhead), which trivially passes the 5% gate.
+// array covering both key and value fields.  The "flat" equivalent uses two
+// separate List columns (List(Utf8) + List(F64)), each of which carries its own
+// outer-offsets column — so the split form duplicates the outer offsets.  Expected
+// result: the shared-offsets form is strictly smaller (negative overhead), which
+// trivially passes the 5% gate.
 //
-// Flat physical (7 leaf physical fields):
+// Split physical (7 leaf physical fields):
 //   sr_device_id      → offsets(U32) + data(Bytes)                 [Utf8]
-//   sr_reading_key    → outer_offsets(U32) + inner_offsets(U32) +
-//                        data(Bytes)                               [ArrayOfUtf8]
-//   sr_reading_value  → outer_offsets(U32) + values(F64)           [ArrayOf(F64)]
-//                        ↑ duplicates the outer_offsets above
+//   sr_reading_key    → offsets(U32) + item.offsets(U32) +
+//                        item.data(Bytes)                          [List(Utf8)]
+//   sr_reading_value  → offsets(U32) + item.values(F64)            [List(F64)]
+//                        ↑ duplicates the outer offsets above
 //
 // recursive physical (6 leaf physical fields):
 //   sensors.device_id.offsets / data
@@ -455,7 +466,7 @@ fn write_recursive_tx(d: &TxData) -> Vec<u8> {
 
 struct SensorData {
     device_ids: Vec<String>,         // n_rows  (row_count = n)
-    reading_outer_offsets: Vec<u32>, // n_rows + 1 (used as ArrayOf offsets)
+    reading_outer_offsets: Vec<u32>, // n_rows + 1 (used as List offsets)
     reading_keys: Vec<String>,       // flat, n_total_readings
     reading_values: Vec<f64>,        // flat, n_total_readings
 }
@@ -503,24 +514,24 @@ fn make_sensor_data(n_rows: usize, readings_per_row: usize) -> SensorData {
     }
 }
 
-/// Flat: two Array columns (ArrayOfUtf8 + ArrayOf(F64)) each carrying their
-/// own outer-offsets — the structural duplication that the recursive form avoids.
+/// Split: two List columns (List(Utf8) + List(F64)) each carrying their
+/// own outer-offsets — the structural duplication that the shared-offsets form avoids.
 fn flat_sensor_schema() -> Schema {
     Schema::new(vec![
         ColumnSpec::utf8("sr_device_id", delta_leb_zstd(), zstd_only()),
-        // ArrayOfUtf8: outer_offsets + inner_offsets + data
-        ColumnSpec::array_of_utf8(
+        // List(Utf8): offsets + item.offsets + item.data
+        ColumnSpec::list(
             "sr_reading_key",
-            delta_leb_zstd(),
-            delta_leb_zstd(),
-            zstd_only(),
+            LogicalType::Utf8,
+            vec![delta_leb_zstd(), delta_leb_zstd(), zstd_only()],
         ),
-        // ArrayOf(F64): outer_offsets + values  (outer_offsets duplicated from above)
-        ColumnSpec::array_of(
+        // List(F64): offsets + item.values  (offsets duplicated from above)
+        ColumnSpec::list(
             "sr_reading_value",
-            DataType::F64,
-            delta_leb_zstd(),
-            gorilla_zstd(),
+            LogicalType::Primitive {
+                data_type: DataType::F64,
+            },
+            vec![delta_leb_zstd(), gorilla_zstd()],
         ),
     ])
 }
@@ -552,16 +563,18 @@ fn write_flat_sensor(d: &SensorData) -> Vec<u8> {
             // row_count = offsets.len() - 1 = n  ✓
             (
                 "sr_reading_key",
-                LogicalColumn::ArrayOfUtf8 {
+                LogicalColumn::List {
                     offsets: d.reading_outer_offsets.clone(),
-                    strings: d.reading_keys.clone(),
+                    values: Box::new(LogicalColumn::Utf8(d.reading_keys.clone())),
                 },
             ),
             (
                 "sr_reading_value",
-                LogicalColumn::ArrayOf {
+                LogicalColumn::List {
                     offsets: d.reading_outer_offsets.clone(),
-                    values: ColumnData::F64(d.reading_values.clone()),
+                    values: Box::new(LogicalColumn::Primitive(ColumnData::F64(
+                        d.reading_values.clone(),
+                    ))),
                 },
             ),
         ],
@@ -711,7 +724,11 @@ fn flat_mr_schema() -> Schema {
         ColumnSpec::utf8("mr_method", delta_leb_zstd(), zstd_only()),
         ColumnSpec::utf8("mr_path", delta_leb_zstd(), zstd_only()),
         ColumnSpec::utf8("mr_status_text", delta_leb_zstd(), zstd_only()),
-        ColumnSpec::array_of_utf8("mr_tags", delta_leb_zstd(), delta_leb_zstd(), zstd_only()),
+        ColumnSpec::list(
+            "mr_tags",
+            LogicalType::Utf8,
+            vec![delta_leb_zstd(), delta_leb_zstd(), zstd_only()],
+        ),
         ColumnSpec::utf8("mr_notes", delta_leb_zstd(), zstd_only()),
     ])
 }
@@ -747,9 +764,9 @@ fn write_flat_mr(d: &MrData) -> Vec<u8> {
             ),
             (
                 "mr_tags",
-                LogicalColumn::ArrayOfUtf8 {
+                LogicalColumn::List {
                     offsets: d.tag_offsets.clone(),
-                    strings: d.tags.clone(),
+                    values: Box::new(LogicalColumn::Utf8(d.tags.clone())),
                 },
             ),
             ("mr_notes", LogicalColumn::Utf8(d.notes.clone())),
@@ -893,7 +910,7 @@ fn verify_sensor_roundtrip(flat: &[u8], rec: &[u8], n: usize) {
     };
     assert_eq!(devs.len(), n, "[sensor flat] device_id row count mismatch");
 
-    // Flat: verify sr_reading_key row count = n (ArrayOfUtf8 uses outer offsets)
+    // Split: verify sr_reading_key row count = n (List(Utf8) uses outer offsets)
     let key_col = read_column(flat, "sr_reading_key");
     assert_eq!(
         key_col.row_count(),
@@ -901,7 +918,7 @@ fn verify_sensor_roundtrip(flat: &[u8], rec: &[u8], n: usize) {
         "[sensor flat] reading_key row count mismatch"
     );
 
-    // Flat: verify sr_reading_value row count = n (ArrayOf uses outer offsets)
+    // Split: verify sr_reading_value row count = n (List(F64) uses outer offsets)
     let val_col = read_column(flat, "sr_reading_value");
     assert_eq!(
         val_col.row_count(),

@@ -158,11 +158,10 @@ vocabulary:
 - **Semantic** — `Decimal128`, `Date` (days / millis), `Datetime`
   (unit + optional timezone).
 
-A handful of flat legacy variants (`NullablePrim`, `NullableUtf8`,
-`NullableBinary`, `ArrayOf`, `ArrayOfUtf8`) predate the recursive forms and
-remain in the type system for now; **new schemas should use the recursive
-`Nullable` / `List` and `Dictionary` instead**. The Avro / CSV / JSON /
-Parquet adapters (under `src/schema/`) already emit the recursive forms.
+The schema vocabulary is fully recursive — nullability, lists, and dictionaries
+are expressed through `Nullable`, `List`, and `Dictionary` rather than dedicated
+flat variants. The Avro / CSV / JSON / Parquet adapters (under `src/schema/`)
+emit these recursive forms.
 
 See [Logical types catalog](#logical-types-catalog) for each type's physical
 decomposition and the matching `LogicalColumn` constructor.

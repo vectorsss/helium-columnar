@@ -11,7 +11,6 @@
 //! - `row_count()` for List
 //! - multi-stripe write/read concatenation for List
 //! - schema JSON `"kind": "list"` tag round-trip
-//! - legacy flat back-compat: `ArrayOf` and `ArrayOfUtf8` schemas remain readable
 //! - validation error cases
 
 use std::io::Cursor;
@@ -571,94 +570,6 @@ fn list_multi_stripe_concat() {
         *rv,
         LogicalColumn::Primitive(ColumnData::I32(vec![1, 2, 3, 4, 5, 6]))
     );
-}
-
-// ---------------------------------------------------------------------------
-// back-compat test: legacy flat ArrayOf remains readable
-// ---------------------------------------------------------------------------
-
-#[test]
-fn flat_array_of_remains_readable() {
-    // Write using legacy flat ArrayOf schema
-    let spec = ColumnSpec::array_of("tags", DataType::I32, delta_leb_zstd(), delta_leb_zstd());
-    let schema = Schema::new(vec![spec.clone()]);
-    let reg = registry();
-
-    // 3 rows: [[10,20],[30],[40,50]]
-    let offsets: Vec<u32> = vec![0, 2, 3, 5];
-    let values = ColumnData::I32(vec![10, 20, 30, 40, 50]);
-
-    let data = LogicalColumn::ArrayOf {
-        offsets: offsets.clone(),
-        values: values.clone(),
-    };
-
-    let mut buf = Cursor::new(Vec::<u8>::new());
-    let mut writer = HeliumWriter::new(&mut buf, schema, &reg).expect("writer");
-    writer.write_column("tags", data).expect("write");
-    writer.finish().expect("finish");
-
-    // Read back — must still work with the recursive reader
-    buf.set_position(0);
-    let mut reader = HeliumReader::new(&mut buf, &reg).expect("reader");
-    let result = reader.read_column("tags").expect("read");
-    let LogicalColumn::ArrayOf {
-        offsets: ro,
-        values: rv,
-    } = result
-    else {
-        panic!("expected ArrayOf, got something else");
-    };
-    assert_eq!(ro, offsets);
-    assert_eq!(rv, values);
-}
-
-#[test]
-fn flat_array_of_utf8_remains_readable() {
-    // Write using legacy flat ArrayOfUtf8 schema
-    let spec = ColumnSpec::array_of_utf8("names", delta_leb_zstd(), delta_leb_zstd(), zstd_only());
-    let schema = Schema::new(vec![spec]);
-    let reg = registry();
-
-    // 2 rows: [["hello","world"],["foo"]]
-    let offsets: Vec<u32> = vec![0, 2, 3];
-    let strings = vec!["hello".to_string(), "world".to_string(), "foo".to_string()];
-
-    let data = LogicalColumn::ArrayOfUtf8 {
-        offsets: offsets.clone(),
-        strings: strings.clone(),
-    };
-
-    let mut buf = Cursor::new(Vec::<u8>::new());
-    let mut writer = HeliumWriter::new(&mut buf, schema, &reg).expect("writer");
-    writer.write_column("names", data).expect("write");
-    writer.finish().expect("finish");
-
-    buf.set_position(0);
-    let mut reader = HeliumReader::new(&mut buf, &reg).expect("reader");
-    let result = reader.read_column("names").expect("read");
-    let LogicalColumn::ArrayOfUtf8 {
-        offsets: ro,
-        strings: rs,
-    } = result
-    else {
-        panic!("expected ArrayOfUtf8");
-    };
-    assert_eq!(ro, offsets);
-    assert_eq!(rs, strings);
-}
-
-#[test]
-fn flat_array_of_schema_json_still_deserializes() {
-    // Confirm that a legacy flat ArrayOf schema JSON is still parseable by the recursive reader.
-    let json = r#"{"version":1,"columns":[{"name":"x","logical_type":{"kind":"array_of","data_type":"i32"},"encodings":[[{"id":"zstd"}],[{"id":"zstd"}]]}]}"#;
-    let schema = Schema::from_json(json.as_bytes()).expect("should parse legacy flat ArrayOf schema");
-    assert!(matches!(
-        schema.columns[0].logical_type,
-        LogicalType::ArrayOf {
-            data_type: DataType::I32
-        }
-    ));
 }
 
 // ---------------------------------------------------------------------------

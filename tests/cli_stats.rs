@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 use assert_cmd::Command;
 use helium::{
-    CoderRegistry, CoderSpec, ColumnData, ColumnSpec, DataType, HeliumWriter, LogicalColumn, Schema,
+    CoderRegistry, CoderSpec, ColumnData, ColumnSpec, DataType, HeliumWriter, LogicalColumn,
+    LogicalType, Schema,
 };
 use predicates::prelude::*;
 use tempfile::TempDir;
@@ -104,17 +105,21 @@ fn write_known_i64(dir: &TempDir, name: &str, values: Vec<i64>) -> PathBuf {
 fn write_nullable_i64(dir: &TempDir, values: Vec<Option<i64>>) -> PathBuf {
     let schema = Schema {
         version: 1,
-        columns: vec![ColumnSpec::nullable_prim(
+        columns: vec![ColumnSpec::nullable(
             "val",
-            DataType::I64,
-            // present bitmap: U8 → rle (NonBlock, U8→U8) → leb128 (NonBlock, U8→Bytes) → zstd.
+            LogicalType::Primitive {
+                data_type: DataType::I64,
+            },
             vec![
-                CoderSpec::new("rle"),
-                CoderSpec::new("leb128"),
-                CoderSpec::new("zstd"),
+                // present bitmap: U8 → rle (NonBlock, U8→U8) → leb128 (NonBlock, U8→Bytes) → zstd.
+                vec![
+                    CoderSpec::new("rle"),
+                    CoderSpec::new("leb128"),
+                    CoderSpec::new("zstd"),
+                ],
+                // values: I64 → leb128 → zstd.
+                vec![CoderSpec::new("leb128"), CoderSpec::new("zstd")],
             ],
-            // values: I64 → leb128 → zstd.
-            vec![CoderSpec::new("leb128"), CoderSpec::new("zstd")],
         )],
     };
     let reg = CoderRegistry::default();
@@ -125,9 +130,9 @@ fn write_nullable_i64(dir: &TempDir, values: Vec<Option<i64>>) -> PathBuf {
     let vals: Vec<i64> = values.iter().filter_map(|v| *v).collect();
     w.write_column(
         "val",
-        LogicalColumn::NullablePrim {
+        LogicalColumn::Nullable {
             present,
-            values: ColumnData::I64(vals),
+            value: Box::new(LogicalColumn::Primitive(ColumnData::I64(vals))),
         },
     )
     .unwrap();

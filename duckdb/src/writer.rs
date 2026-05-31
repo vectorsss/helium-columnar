@@ -72,39 +72,6 @@ pub(crate) fn write_flat_column_window(
             }
         }
 
-        // legacy flat nullable primitives (present bitmap covers all rows, values dense)
-        LogicalColumn::NullablePrim { present, values } => {
-            write_flat_data_nullable(vec, values, present, row_start, chunk_size);
-        }
-
-        LogicalColumn::NullableUtf8 { present, strings } => {
-            for (i, (is_present, s)) in present[row_start..row_start + chunk_size]
-                .iter()
-                .zip(strings[row_start..row_start + chunk_size].iter())
-                .enumerate()
-            {
-                if *is_present {
-                    vec.insert(i, s.as_str());
-                } else {
-                    vec.set_null(i);
-                }
-            }
-        }
-
-        LogicalColumn::NullableBinary { present, blobs } => {
-            for (i, (is_present, blob)) in present[row_start..row_start + chunk_size]
-                .iter()
-                .zip(blobs[row_start..row_start + chunk_size].iter())
-                .enumerate()
-            {
-                if *is_present {
-                    vec.insert(i, blob.as_slice());
-                } else {
-                    vec.set_null(i);
-                }
-            }
-        }
-
         LogicalColumn::Dictionary { dictionary, indices } => match dictionary.as_ref() {
             LogicalColumn::Primitive(cd) => {
                 expand_dict_prim(vec, cd, indices, row_start, chunk_size);
@@ -194,10 +161,6 @@ pub(crate) fn write_flat_column_window(
             }
         }
 
-        LogicalColumn::ArrayOf { .. } | LogicalColumn::ArrayOfUtf8 { .. } => {
-            return Err("read_he: ArrayOf (legacy flat) not supported".into());
-        }
-
         LogicalColumn::Struct { .. } | LogicalColumn::List { .. } | LogicalColumn::Map { .. } => {
             return Err(
                 "read_he: nested type passed to flat writer (bug — should route through \
@@ -242,47 +205,6 @@ fn write_flat_data(vec: &mut FlatVector, data: &ColumnData, row_start: usize, ch
                 vec.insert(i, std::slice::from_ref(b));
             }
         }
-    }
-}
-
-/// Write a nullable `ColumnData` (legacy flat `NullablePrim` semantics — dense storage,
-/// null bitmap separate) into the output vector.
-fn write_flat_data_nullable(
-    vec: &mut FlatVector,
-    data: &ColumnData,
-    present: &[bool],
-    row_start: usize,
-    chunk_size: usize,
-) {
-    macro_rules! write_with_nulls {
-        ($vals:expr, $ty:ty) => {{
-            let ptr = vec.as_mut_ptr::<$ty>();
-            for (i, (&p, &v)) in present[row_start..row_start + chunk_size]
-                .iter()
-                .zip($vals[row_start..row_start + chunk_size].iter())
-                .enumerate()
-            {
-                if p {
-                    // SAFETY: writing within the DuckDB-allocated slot.
-                    unsafe { ptr.add(i).write(v) };
-                } else {
-                    vec.set_null(i);
-                }
-            }
-        }};
-    }
-    match data {
-        ColumnData::I8(v) => write_with_nulls!(v, i8),
-        ColumnData::I16(v) => write_with_nulls!(v, i16),
-        ColumnData::I32(v) => write_with_nulls!(v, i32),
-        ColumnData::I64(v) => write_with_nulls!(v, i64),
-        ColumnData::U8(v) => write_with_nulls!(v, u8),
-        ColumnData::U16(v) => write_with_nulls!(v, u16),
-        ColumnData::U32(v) => write_with_nulls!(v, u32),
-        ColumnData::U64(v) => write_with_nulls!(v, u64),
-        ColumnData::F32(v) => write_with_nulls!(v, f32),
-        ColumnData::F64(v) => write_with_nulls!(v, f64),
-        ColumnData::Bytes(_) => { /* Not reachable for NullablePrim */ }
     }
 }
 

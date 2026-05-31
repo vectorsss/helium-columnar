@@ -1,8 +1,7 @@
 //! Integration tests for helium-optimizer.
 //!
 //! Covers:
-//! - Flat column types: Primitive(I32/I64/F32/F64), Utf8, Binary
-//! - legacy flat compatibility: NullablePrim, NullableUtf8, NullableBinary
+//! - Scalar column types: Primitive(I32/I64/F32/F64), Utf8, Binary
 //! - recursive nested: Struct, List<Primitive>, List<Utf8>, Map<Utf8,Primitive>,
 //!   Nullable<Struct>, deep nesting (5 levels)
 //! - Semantic types: Decimal128, Date32 (Date{Days}), Date64 (Date{Millis}), Datetime
@@ -137,7 +136,7 @@ fn optimize_binary() {
 }
 
 // ---------------------------------------------------------------------------
-// legacy flat compatibility types
+// Nullable column types
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -149,37 +148,38 @@ fn optimize_nullable_prim_i32() {
         .enumerate()
         .map(|(i, _)| i as i32)
         .collect();
-    let lc = LogicalColumn::NullablePrim {
+    let lc = LogicalColumn::Nullable {
         present: present.clone(),
-        values: ColumnData::I32(values.clone()),
+        value: Box::new(LogicalColumn::Primitive(ColumnData::I32(values.clone()))),
     };
-    let lt = LogicalType::NullablePrim {
-        data_type: DataType::I32,
+    let lt = LogicalType::Nullable {
+        inner: Box::new(LogicalType::Primitive {
+            data_type: DataType::I32,
+        }),
     };
 
     let schema = Optimizer::new()
         .optimize(vec![("n".into(), lt, lc)])
         .expect("optimize");
     let spec = &schema.columns[0];
-    // NullablePrim = 2 encodings (present + values)
+    // Nullable(Primitive) = 2 encodings (present + values)
     assert_eq!(spec.encodings.len(), 2);
-    let lc2 = LogicalColumn::NullablePrim {
+    let lc2 = LogicalColumn::Nullable {
         present: present.clone(),
-        values: ColumnData::I32(values.clone()),
+        value: Box::new(LogicalColumn::Primitive(ColumnData::I32(values.clone()))),
     };
     let result = roundtrip_spec(spec, lc2);
     assert_eq!(
         result,
-        LogicalColumn::NullablePrim {
+        LogicalColumn::Nullable {
             present,
-            values: ColumnData::I32(values)
+            value: Box::new(LogicalColumn::Primitive(ColumnData::I32(values))),
         }
     );
 }
 
 #[test]
 fn optimize_flat_nullable_utf8() {
-    // legacy flat NullableUtf8 type
     let present: Vec<bool> = (0..50).map(|i| i % 4 != 0).collect();
     let strings: Vec<String> = present
         .iter()
@@ -187,23 +187,31 @@ fn optimize_flat_nullable_utf8() {
         .enumerate()
         .map(|(i, _)| format!("s{i}"))
         .collect();
-    let lc = LogicalColumn::NullableUtf8 {
+    let lc = LogicalColumn::Nullable {
         present: present.clone(),
-        strings: strings.clone(),
+        value: Box::new(LogicalColumn::Utf8(strings.clone())),
     };
-    let lt = LogicalType::NullableUtf8;
+    let lt = LogicalType::Nullable {
+        inner: Box::new(LogicalType::Utf8),
+    };
 
     let schema = Optimizer::new()
         .optimize(vec![("ns".into(), lt, lc)])
         .expect("optimize");
     let spec = &schema.columns[0];
     assert_eq!(spec.encodings.len(), 3); // present + offsets + data
-    let lc2 = LogicalColumn::NullableUtf8 {
+    let lc2 = LogicalColumn::Nullable {
         present: present.clone(),
-        strings: strings.clone(),
+        value: Box::new(LogicalColumn::Utf8(strings.clone())),
     };
     let result = roundtrip_spec(spec, lc2);
-    assert_eq!(result, LogicalColumn::NullableUtf8 { present, strings });
+    assert_eq!(
+        result,
+        LogicalColumn::Nullable {
+            present,
+            value: Box::new(LogicalColumn::Utf8(strings)),
+        }
+    );
 }
 
 #[test]

@@ -119,11 +119,9 @@ These supersede the parent file where they conflict.
 
 When adding a coder: stable string ID (frozen the moment any `.he` ships with it), specialize on `input_type: DataType` in the factory, **new ID for new parameter shapes** (`bitpack_fixed` vs `bitpack_auto` is the canonical split — don't add boolean switches to one ID).
 
-### Recursive `LogicalType` (recursive schema vocabulary)
+### Recursive `LogicalType` (schema vocabulary)
 
-The parent file lists the legacy flat variants (`NullablePrim`, `ArrayOf`, ...). The recursive variants — `Struct`, `List`, `Map`, `Nullable`, `Union` — compose. All recursive variants ship as **struct variants** (`Variant { field: Box<LogicalType> }`), not newtype, because `#[serde(tag = "kind")]` cannot wrap newtypes. The `"kind"` value and inner field names are wire-format-frozen the same way coder IDs are — they appear in every `.he` schema JSON.
-
-`tests/schema_back_compat.rs` is the grep-able boundary that proves every legacy flat variant remains readable. New schemas should use the recursive forms.
+The schema vocabulary is fully recursive: nullability, lists, and dictionaries compose via `Nullable`, `List`, `Map`, `Union`, and `Dictionary` rather than dedicated flat variants. (Earlier revisions carried flat `NullablePrim` / `ArrayOf` / `DictPrim` etc.; these were removed before 1.0 — the format makes no on-disk stability promise at 0.x, so regenerate any old files from source.) All recursive variants ship as **struct variants** (`Variant { field: Box<LogicalType> }`), not newtype, because `#[serde(tag = "kind")]` cannot wrap newtypes. The `"kind"` value and inner field names are wire-format-frozen the same way coder IDs are — they appear in every `.he` schema JSON.
 
 ### Dict columns + multi-stripe gotcha
 

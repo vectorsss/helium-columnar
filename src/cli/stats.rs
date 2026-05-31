@@ -198,20 +198,22 @@ fn stats_from_footer(
         // For numeric Primitive columns this is leaf 0 (the only leaf).
         // For Utf8, it's leaf 1 (data). For Nullable, it's leaf 1 (values).
         // We pick the first leaf that has a non-None min.
-        let (leaf_min, leaf_max, leaf_null) = phys
+        let (leaf_min, leaf_max) = phys
             .iter()
             .find(|l| l.min.is_some())
-            .map(|l| (l.min.clone(), l.max.clone(), l.null_count))
-            .unwrap_or((None, None, phys.first().and_then(|l| l.null_count)));
+            .map(|l| (l.min.clone(), l.max.clone()))
+            .unwrap_or((None, None));
 
         if leaf_min.is_some() {
             any_stats = true;
             global_min = merge_min(global_min.take(), leaf_min);
             global_max = merge_max(global_max.take(), leaf_max);
         }
-        // Accumulate null count from the leaf that carries it.
-        // For Nullable types the present-bitmap leaf (index 0) has null_count.
-        if let Some(null_c) = leaf_null {
+        // Accumulate null count from the leaf that carries it. For Nullable
+        // columns the present-bitmap leaf reports the null count while the inner
+        // value leaf reports 0, so take the max across all of this column's
+        // leaves rather than the min/max leaf's own count.
+        if let Some(null_c) = phys.iter().filter_map(|l| l.null_count).max() {
             total_null += null_c;
         }
     }
@@ -445,8 +447,6 @@ fn compute_column_stats(
         | LogicalType::List { .. }
         | LogicalType::Map { .. }
         | LogicalType::Union { .. }
-        | LogicalType::ArrayOf { .. }
-        | LogicalType::ArrayOfUtf8
         | LogicalType::Dictionary { .. } => {
             return (StatValue::NotAvailable, StatValue::NotAvailable, row_count);
         }
@@ -499,45 +499,7 @@ fn stats_from_logical_column(col: &LogicalColumn) -> (StatValue, StatValue, u64)
                 blobs.len() as u64,
             )
         }
-        LogicalColumn::NullablePrim { present, values } => {
-            let non_null_count = present.iter().filter(|&&b| b).count() as u64;
-            if non_null_count == 0 {
-                return (StatValue::NotAvailable, StatValue::NotAvailable, 0);
-            }
-            let (min, max) = min_max_column_data(values);
-            (min, max, non_null_count)
-        }
-        LogicalColumn::NullableUtf8 { present, strings } => {
-            let non_null_count = present.iter().filter(|&&b| b).count() as u64;
-            if non_null_count == 0 || strings.is_empty() {
-                return (StatValue::NotAvailable, StatValue::NotAvailable, 0);
-            }
-            let min = strings
-                .iter()
-                .min()
-                .map(|s| StatValue::Str(s.clone()))
-                .unwrap_or(StatValue::NotAvailable);
-            let max = strings
-                .iter()
-                .max()
-                .map(|s| StatValue::Str(s.clone()))
-                .unwrap_or(StatValue::NotAvailable);
-            (min, max, non_null_count)
-        }
-        LogicalColumn::NullableBinary { present, blobs } => {
-            let non_null_count = present.iter().filter(|&&b| b).count() as u64;
-            if non_null_count == 0 || blobs.is_empty() {
-                return (StatValue::NotAvailable, StatValue::NotAvailable, 0);
-            }
-            let min_len = blobs.iter().map(|b| b.len()).min().unwrap_or(0);
-            let max_len = blobs.iter().map(|b| b.len()).max().unwrap_or(0);
-            (
-                StatValue::Bytes(min_len),
-                StatValue::Bytes(max_len),
-                non_null_count,
-            )
-        }
-        // recursive Nullable wrapper (new-style).
+        // recursive Nullable wrapper.
         LogicalColumn::Nullable { present, value } => {
             let non_null_count = present.iter().filter(|&&b| b).count() as u64;
             if non_null_count == 0 {
@@ -546,8 +508,8 @@ fn stats_from_logical_column(col: &LogicalColumn) -> (StatValue, StatValue, u64)
             let (min, max, _) = stats_from_logical_column(value);
             (min, max, non_null_count)
         }
-        // All other types (Struct, List, Map, Union, Dictionary,
-        // ArrayOf, ArrayOfUtf8) have no canonical scalar min/max.
+        // All other types (Struct, List, Map, Union, Dictionary)
+        // have no canonical scalar min/max.
         _ => {
             let row_count = col.row_count() as u64;
             (StatValue::NotAvailable, StatValue::NotAvailable, row_count)
@@ -870,11 +832,6 @@ fn fmt_logical_type(lt: &LogicalType) -> String {
         LogicalType::Primitive { data_type } => format!("{data_type:?}"),
         LogicalType::Utf8 => "Utf8".to_string(),
         LogicalType::Binary => "Binary".to_string(),
-        LogicalType::ArrayOf { data_type } => format!("Array<{data_type:?}>"),
-        LogicalType::ArrayOfUtf8 => "Array<Utf8>".to_string(),
-        LogicalType::NullablePrim { data_type } => format!("Nullable<{data_type:?}>"),
-        LogicalType::NullableUtf8 => "Nullable<Utf8>".to_string(),
-        LogicalType::NullableBinary => "Nullable<Binary>".to_string(),
         LogicalType::Dictionary { inner } => format!("Dictionary<{}>", fmt_logical_type(inner)),
         LogicalType::Struct { .. } => "Struct".to_string(),
         LogicalType::List { inner } => format!("List<{}>", fmt_logical_type(inner)),

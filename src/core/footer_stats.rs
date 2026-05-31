@@ -702,43 +702,6 @@ pub(super) fn compute_filters_for_logical_column(
             }
             vec![None, acc.finish()]
         }
-        // --- ArrayOf ---
-        (LogicalColumn::ArrayOf { values, .. }, _) => {
-            // [outer_offsets, inner.values]
-            vec![None, compute_filter_for_column_data(values)]
-        }
-        // --- ArrayOfUtf8 ---
-        (LogicalColumn::ArrayOfUtf8 { strings, .. }, _) => {
-            // [outer_offsets, inner_offsets, data]
-            let mut acc = FilterAccumulator::new();
-            for s in strings {
-                acc.insert_mmv(MinMaxValue::Utf8(s.clone()));
-            }
-            vec![None, None, acc.finish()]
-        }
-        // --- NullablePrim ---
-        (LogicalColumn::NullablePrim { values, .. }, _) => {
-            // [present, values]
-            vec![None, compute_filter_for_column_data(values)]
-        }
-        // --- NullableUtf8 ---
-        (LogicalColumn::NullableUtf8 { strings, .. }, _) => {
-            // [present, offsets, data]
-            let mut acc = FilterAccumulator::new();
-            for s in strings {
-                acc.insert_mmv(MinMaxValue::Utf8(s.clone()));
-            }
-            vec![None, None, acc.finish()]
-        }
-        // --- NullableBinary ---
-        (LogicalColumn::NullableBinary { blobs, .. }, _) => {
-            // [present, offsets, data]
-            let mut acc = FilterAccumulator::new();
-            for b in blobs {
-                acc.insert_mmv(MinMaxValue::Binary(encode_binary_stat(b)));
-            }
-            vec![None, None, acc.finish()]
-        }
         // --- Dictionary{inner} ---
         (LogicalColumn::Dictionary { dictionary, .. }, LogicalType::Dictionary { inner }) => {
             // Delegate to the inner column's filter computation, then append
@@ -977,72 +940,6 @@ pub(super) fn compute_stats_for_logical_column(
                 _ => (None, None),
             };
             vec![(None, None, Some(0)), (mn, mx, Some(0))]
-        }
-        // --- legacy flat ArrayOf ---
-        (LogicalColumn::ArrayOf { values, .. }, _) => {
-            let (mn, mx) = compute_min_max(values);
-            vec![(None, None, Some(0)), (mn, mx, Some(0))]
-        }
-        // --- legacy flat ArrayOfUtf8 ---
-        (LogicalColumn::ArrayOfUtf8 { strings, .. }, _) => {
-            let (mn, mx) = match (strings.iter().min(), strings.iter().max()) {
-                (Some(min), Some(max)) => (
-                    Some(MinMaxValue::Utf8(truncate_str(min))),
-                    Some(MinMaxValue::Utf8(truncate_str(max))),
-                ),
-                _ => (None, None),
-            };
-            // [outer_offsets, inner_offsets, data]
-            vec![
-                (None, None, Some(0)),
-                (None, None, Some(0)),
-                (mn, mx, Some(0)),
-            ]
-        }
-        // --- legacy flat NullablePrim ---
-        (LogicalColumn::NullablePrim { present, values }, _) => {
-            let null_count = present.iter().filter(|&&p| !p).count() as u64;
-            // Filter to only present values for stats
-            let (mn, mx) = if present.iter().any(|&p| p) {
-                compute_min_max(values)
-            } else {
-                (None, None)
-            };
-            vec![(None, None, Some(null_count)), (mn, mx, Some(null_count))]
-        }
-        // --- legacy flat NullableUtf8 ---
-        (LogicalColumn::NullableUtf8 { present, strings }, _) => {
-            let null_count = present.iter().filter(|&&p| !p).count() as u64;
-            let (mn, mx) = match (strings.iter().min(), strings.iter().max()) {
-                (Some(min), Some(max)) => (
-                    Some(MinMaxValue::Utf8(truncate_str(min))),
-                    Some(MinMaxValue::Utf8(truncate_str(max))),
-                ),
-                _ => (None, None),
-            };
-            vec![
-                (None, None, Some(null_count)),
-                (None, None, Some(null_count)),
-                (mn, mx, Some(null_count)),
-            ]
-        }
-        // --- legacy flat NullableBinary ---
-        (LogicalColumn::NullableBinary { present, blobs }, _) => {
-            let null_count = present.iter().filter(|&&p| !p).count() as u64;
-            let min_blob = blobs.iter().min_by(|a, b| a.as_slice().cmp(b.as_slice()));
-            let max_blob = blobs.iter().max_by(|a, b| a.as_slice().cmp(b.as_slice()));
-            let (mn, mx) = match (min_blob, max_blob) {
-                (Some(mn_b), Some(mx_b)) => (
-                    Some(MinMaxValue::Binary(encode_binary_stat(mn_b))),
-                    Some(MinMaxValue::Binary(encode_binary_stat(mx_b))),
-                ),
-                _ => (None, None),
-            };
-            vec![
-                (None, None, Some(null_count)),
-                (None, None, Some(null_count)),
-                (mn, mx, Some(null_count)),
-            ]
         }
         // --- Dictionary{inner} ---
         (LogicalColumn::Dictionary { dictionary, .. }, LogicalType::Dictionary { inner }) => {

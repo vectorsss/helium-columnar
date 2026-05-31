@@ -188,9 +188,6 @@ Expected output ends with `=== All smoke tests passed ===`.
 | `Primitive { F64 }` | `DOUBLE` |
 | `Utf8` | `VARCHAR` |
 | `Binary` | `BLOB` |
-| `NullablePrim { T }` | same as `T`, nullable |
-| `NullableUtf8` | `VARCHAR`, nullable |
-| `NullableBinary` | `BLOB`, nullable |
 | `Dictionary { Primitive { T } }` | same as `T` (dictionary expanded) |
 | `Dictionary { Utf8 }` | `VARCHAR` (dictionary expanded) |
 | `Nullable { T }` | same as `T`, nullable |
@@ -212,8 +209,8 @@ These are tracked in [`docs/ROADMAP.md`](../docs/ROADMAP.md) → *Bindings*.
   unit-tested (`src/prune.rs`), but the DuckDB *loadable* extension C-API
   (v1.2.0) exposes no filter-pushdown hook, so DuckDB never passes the
   extension the `WHERE` bounds. See the "note on predicate pushdown" above.
-- **`Union` and legacy flat `ArrayOf` / `ArrayOfUtf8` are not yet projected.** They error
-  at bind time with a clear message. `Struct`, `List`, and `Map` are supported.
+- **`Union` is not yet projected.** It errors at bind time with a clear
+  message. `Struct`, `List`, and `Map` are supported.
 - **Read-only.** The extension queries existing `.he` files; produce them with
   the `helium` CLI or library.
 

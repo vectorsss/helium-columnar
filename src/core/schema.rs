@@ -112,8 +112,9 @@ fn default_version() -> u32 {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Schema {
-    /// Schema format version. Always [`CURRENT_SCHEMA_VERSION`] for newly
-    /// written files; older files may have a lower value.
+    /// Schema format version — currently always [`CURRENT_SCHEMA_VERSION`].
+    /// A reader rejects any schema whose version it does not support, so this
+    /// is the forward-compatibility lever for breaking schema-JSON changes.
     #[serde(default = "default_version")]
     pub version: u32,
     /// Ordered list of top-level column specifications.
@@ -155,8 +156,9 @@ pub struct FieldSpec {
 /// Logical column type.
 ///
 /// The `serde(tag = "kind")` shape is wire-format-visible and frozen.
-/// The legacy flat variants (`ArrayOf`, `ArrayOfUtf8`, `Nullable*`) are kept for
-/// read compatibility; new writers use `List`, `Map`, `Nullable`, `Union`, etc.
+/// The schema vocabulary is fully recursive: nullability, lists, and
+/// dictionaries compose via `Nullable`, `List`, `Map`, `Union`, and
+/// `Dictionary` rather than dedicated flat variants.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LogicalType {
@@ -175,22 +177,6 @@ pub enum LogicalType {
     ///
     /// Physical: `[offsets: U32, data: Bytes]`.
     Binary,
-    /// Legacy flat variant — readable; new writer uses `List`.
-    ArrayOf {
-        /// Element type of the array.
-        data_type: DataType,
-    },
-    /// Legacy flat variant — readable; new writer uses `List(Utf8)`.
-    ArrayOfUtf8,
-    /// Legacy flat variant — readable; new writer uses `Nullable(Primitive(T))`.
-    NullablePrim {
-        /// The primitive element type.
-        data_type: DataType,
-    },
-    /// Legacy flat variant — readable; new writer uses `Nullable(Utf8)`.
-    NullableUtf8,
-    /// Legacy flat variant — readable; new writer uses `Nullable(Binary)`.
-    NullableBinary,
     /// Composite type. `ColumnSpec::encodings` must be empty; leaf encodings
     /// live in child `FieldSpec::encodings`.
     Struct {
@@ -353,54 +339,6 @@ impl LogicalType {
                 data_type: *data_type,
             }],
             Self::Utf8 | Self::Binary => vec![
-                PhysicalField {
-                    role: "offsets".to_string(),
-                    data_type: DataType::U32,
-                },
-                PhysicalField {
-                    role: "data".to_string(),
-                    data_type: DataType::Bytes,
-                },
-            ],
-            Self::ArrayOf { data_type } => vec![
-                PhysicalField {
-                    role: "offsets".to_string(),
-                    data_type: DataType::U32,
-                },
-                PhysicalField {
-                    role: "values".to_string(),
-                    data_type: *data_type,
-                },
-            ],
-            Self::ArrayOfUtf8 => vec![
-                PhysicalField {
-                    role: "outer_offsets".to_string(),
-                    data_type: DataType::U32,
-                },
-                PhysicalField {
-                    role: "inner_offsets".to_string(),
-                    data_type: DataType::U32,
-                },
-                PhysicalField {
-                    role: "data".to_string(),
-                    data_type: DataType::Bytes,
-                },
-            ],
-            Self::NullablePrim { data_type } => vec![
-                PhysicalField {
-                    role: "present".to_string(),
-                    data_type: DataType::U8,
-                },
-                PhysicalField {
-                    role: "values".to_string(),
-                    data_type: *data_type,
-                },
-            ],
-            Self::NullableUtf8 | Self::NullableBinary => vec![
-                PhysicalField {
-                    role: "present".to_string(),
-                    data_type: DataType::U8,
-                },
                 PhysicalField {
                     role: "offsets".to_string(),
                     data_type: DataType::U32,
@@ -660,76 +598,6 @@ impl ColumnSpec {
     /// Construct a binary column.
     pub fn binary(name: impl Into<String>, offsets: Vec<CoderSpec>, data: Vec<CoderSpec>) -> Self {
         Self::new(name, LogicalType::Binary, vec![offsets, data])
-    }
-
-    /// Construct an `ArrayOf` (legacy flat) primitive array column.
-    pub fn array_of(
-        name: impl Into<String>,
-        data_type: DataType,
-        offsets: Vec<CoderSpec>,
-        values: Vec<CoderSpec>,
-    ) -> Self {
-        Self::new(
-            name,
-            LogicalType::ArrayOf { data_type },
-            vec![offsets, values],
-        )
-    }
-
-    /// Construct a `NullablePrim` (legacy flat) nullable primitive column.
-    pub fn nullable_prim(
-        name: impl Into<String>,
-        data_type: DataType,
-        present: Vec<CoderSpec>,
-        values: Vec<CoderSpec>,
-    ) -> Self {
-        Self::new(
-            name,
-            LogicalType::NullablePrim { data_type },
-            vec![present, values],
-        )
-    }
-
-    /// Construct a `NullableUtf8` (legacy flat) nullable string column.
-    pub fn nullable_utf8(
-        name: impl Into<String>,
-        present: Vec<CoderSpec>,
-        offsets: Vec<CoderSpec>,
-        data: Vec<CoderSpec>,
-    ) -> Self {
-        Self::new(
-            name,
-            LogicalType::NullableUtf8,
-            vec![present, offsets, data],
-        )
-    }
-
-    /// Construct a `NullableBinary` (legacy flat) nullable binary column.
-    pub fn nullable_binary(
-        name: impl Into<String>,
-        present: Vec<CoderSpec>,
-        offsets: Vec<CoderSpec>,
-        data: Vec<CoderSpec>,
-    ) -> Self {
-        Self::new(
-            name,
-            LogicalType::NullableBinary,
-            vec![present, offsets, data],
-        )
-    }
-
-    /// Construct an `ArrayOfUtf8` (legacy flat) string-array column.
-    pub fn array_of_utf8(
-        name: impl Into<String>,
-        outer_offsets: Vec<CoderSpec>,
-        inner_offsets: Vec<CoderSpec>,
-        data: Vec<CoderSpec>,
-    ) -> Self {
-        Self::new(
-            name,
-            LogicalType::ArrayOfUtf8,
-            vec![outer_offsets, inner_offsets, data],
-        )
     }
 
     /// Construct a struct column (leaf encodings live in child `FieldSpec`s).
@@ -1350,44 +1218,6 @@ pub enum LogicalColumn {
     Utf8(Vec<String>),
     /// A column of arbitrary byte blobs.
     Binary(Vec<Vec<u8>>),
-    /// Variable-length array of primitives. `offsets` has length N + 1;
-    /// `offsets[i]..offsets[i+1]` is row i's element range in `values`.
-    ArrayOf {
-        /// Row start/end offsets into `values`. Length is N + 1.
-        offsets: Vec<u32>,
-        /// Flat buffer of all element values across all rows.
-        values: ColumnData,
-    },
-    /// Variable-length array of UTF-8 strings. `offsets` has length N + 1;
-    /// `offsets[i]..offsets[i+1]` is row i's element range in `strings`.
-    ArrayOfUtf8 {
-        /// Row start/end offsets into `strings`. Length is N + 1.
-        offsets: Vec<u32>,
-        /// Flat buffer of all string elements across all rows.
-        strings: Vec<String>,
-    },
-    /// Nullable column of primitives. `present[i]` is `true` if row i is
-    /// non-null; `values` contains **all** rows (nulls have unspecified value).
-    NullablePrim {
-        /// `true` = non-null for each row.
-        present: Vec<bool>,
-        /// All row values, including those for null rows (unspecified).
-        values: ColumnData,
-    },
-    /// Nullable column of UTF-8 strings.
-    NullableUtf8 {
-        /// `true` = non-null for each row.
-        present: Vec<bool>,
-        /// All row strings, including those for null rows (unspecified).
-        strings: Vec<String>,
-    },
-    /// Nullable column of byte blobs.
-    NullableBinary {
-        /// `true` = non-null for each row.
-        present: Vec<bool>,
-        /// All row blobs, including those for null rows (unspecified).
-        blobs: Vec<Vec<u8>>,
-    },
     /// Composite struct value. `fields` is a `(name, value)` list in
     /// schema-declaration order; all fields must have the same row count.
     Struct {
@@ -1480,12 +1310,6 @@ impl LogicalColumn {
             Self::Primitive(d) => d.len(),
             Self::Utf8(v) => v.len(),
             Self::Binary(v) => v.len(),
-            Self::ArrayOf { offsets, .. } | Self::ArrayOfUtf8 { offsets, .. } => {
-                offsets.len().saturating_sub(1)
-            }
-            Self::NullablePrim { present, .. }
-            | Self::NullableUtf8 { present, .. }
-            | Self::NullableBinary { present, .. } => present.len(),
             Self::Dictionary { indices, .. } => indices.len(),
             Self::Struct { fields } => fields.first().map_or(0, |(_, col)| col.row_count()),
             Self::List { offsets, .. } | Self::Map { offsets, .. } => {
@@ -1640,56 +1464,6 @@ impl LogicalColumn {
             (Self::Binary(blobs), LogicalType::Binary) => {
                 let (off, data) = flatten_binary(&blobs)?;
                 Ok(vec![ColumnData::U32(off), ColumnData::Bytes(data)])
-            }
-            (Self::ArrayOf { offsets, values }, LogicalType::ArrayOf { data_type }) => {
-                if values.data_type() != *data_type {
-                    return Err(schema_error("array values type mismatch"));
-                }
-                validate_offsets(&offsets, values.len())?;
-                Ok(vec![ColumnData::U32(offsets), values])
-            }
-            (Self::ArrayOfUtf8 { offsets, strings }, LogicalType::ArrayOfUtf8) => {
-                validate_offsets(&offsets, strings.len())?;
-                let (inner_off, data) = flatten_strings(&strings)?;
-                Ok(vec![
-                    ColumnData::U32(offsets),
-                    ColumnData::U32(inner_off),
-                    ColumnData::Bytes(data),
-                ])
-            }
-            (Self::NullablePrim { present, values }, LogicalType::NullablePrim { data_type }) => {
-                if values.data_type() != *data_type {
-                    return Err(schema_error("nullable prim type mismatch"));
-                }
-                let pc = present.iter().filter(|&&p| p).count();
-                if pc != values.len() {
-                    return Err(schema_error("present/values count mismatch"));
-                }
-                Ok(vec![ColumnData::U8(present_to_bytes(&present)), values])
-            }
-            (Self::NullableUtf8 { present, strings }, LogicalType::NullableUtf8) => {
-                let pc = present.iter().filter(|&&p| p).count();
-                if pc != strings.len() {
-                    return Err(schema_error("present/strings count mismatch"));
-                }
-                let (off, data) = flatten_strings(&strings)?;
-                Ok(vec![
-                    ColumnData::U8(present_to_bytes(&present)),
-                    ColumnData::U32(off),
-                    ColumnData::Bytes(data),
-                ])
-            }
-            (Self::NullableBinary { present, blobs }, LogicalType::NullableBinary) => {
-                let pc = present.iter().filter(|&&p| p).count();
-                if pc != blobs.len() {
-                    return Err(schema_error("present/blobs count mismatch"));
-                }
-                let (off, data) = flatten_binary(&blobs)?;
-                Ok(vec![
-                    ColumnData::U8(present_to_bytes(&present)),
-                    ColumnData::U32(off),
-                    ColumnData::Bytes(data),
-                ])
             }
             (
                 Self::Struct { fields: col_fields },
@@ -1920,63 +1694,6 @@ impl LogicalColumn {
                 let off = expect_u32(take_part(&mut it)?)?;
                 let data = expect_bytes(take_part(&mut it)?)?;
                 Ok(Self::Binary(unflatten_binary(&off, &data, row_count)?))
-            }
-            LogicalType::ArrayOf { data_type } => {
-                let mut it = parts.into_iter();
-                let offsets = expect_u32(take_part(&mut it)?)?;
-                let values = take_part(&mut it)?;
-                check_type(&values, *data_type)?;
-                if offsets.len() != row_count + 1 {
-                    return Err(schema_error("array offsets length mismatch"));
-                }
-                Ok(Self::ArrayOf { offsets, values })
-            }
-            LogicalType::ArrayOfUtf8 => {
-                let mut it = parts.into_iter();
-                let outer = expect_u32(take_part(&mut it)?)?;
-                let inner = expect_u32(take_part(&mut it)?)?;
-                let data = expect_bytes(take_part(&mut it)?)?;
-                if outer.len() != row_count + 1 {
-                    return Err(schema_error("outer offsets mismatch"));
-                }
-                let total = *outer.last().unwrap_or(&0) as usize;
-                let strings = unflatten_strings(&inner, &data, total, true)?;
-                Ok(Self::ArrayOfUtf8 {
-                    offsets: outer,
-                    strings,
-                })
-            }
-            LogicalType::NullablePrim { data_type } => {
-                let mut it = parts.into_iter();
-                let pb = expect_u8(take_part(&mut it)?)?;
-                let values = take_part(&mut it)?;
-                check_type(&values, *data_type)?;
-                let present = bytes_to_present(&pb, row_count)?;
-                Ok(Self::NullablePrim { present, values })
-            }
-            LogicalType::NullableUtf8 => {
-                let mut it = parts.into_iter();
-                let pb = expect_u8(take_part(&mut it)?)?;
-                let off = expect_u32(take_part(&mut it)?)?;
-                let data = expect_bytes(take_part(&mut it)?)?;
-                let present = bytes_to_present(&pb, row_count)?;
-                let pc = present.iter().filter(|&&p| p).count();
-                Ok(Self::NullableUtf8 {
-                    present,
-                    strings: unflatten_strings(&off, &data, pc, true)?,
-                })
-            }
-            LogicalType::NullableBinary => {
-                let mut it = parts.into_iter();
-                let pb = expect_u8(take_part(&mut it)?)?;
-                let off = expect_u32(take_part(&mut it)?)?;
-                let data = expect_bytes(take_part(&mut it)?)?;
-                let present = bytes_to_present(&pb, row_count)?;
-                let pc = present.iter().filter(|&&p| p).count();
-                Ok(Self::NullableBinary {
-                    present,
-                    blobs: unflatten_binary(&off, &data, pc)?,
-                })
             }
             LogicalType::Struct {
                 fields: spec_fields,
@@ -2242,22 +1959,9 @@ fn parts_logical_row_count(parts: &[ColumnData], lt: &LogicalType) -> Result<usi
             Ok(off.len().saturating_sub(1))
         }
         // Nullable: first leaf is the U8 present bitmap; one entry per row.
-        LogicalType::Nullable { .. }
-        | LogicalType::NullablePrim { .. }
-        | LogicalType::NullableUtf8
-        | LogicalType::NullableBinary => Ok(parts[0].len()),
+        LogicalType::Nullable { .. } => Ok(parts[0].len()),
         // List / Map: first leaf is offsets; n rows → n+1 offsets.
         LogicalType::List { .. } | LogicalType::Map { .. } => {
-            let off = expect_u32(parts[0].clone())?;
-            Ok(off.len().saturating_sub(1))
-        }
-        // ArrayOf: first leaf is offsets.
-        LogicalType::ArrayOf { .. } => {
-            let off = expect_u32(parts[0].clone())?;
-            Ok(off.len().saturating_sub(1))
-        }
-        // ArrayOfUtf8: first leaf is outer offsets.
-        LogicalType::ArrayOfUtf8 => {
             let off = expect_u32(parts[0].clone())?;
             Ok(off.len().saturating_sub(1))
         }
@@ -2646,35 +2350,6 @@ impl LogicalColumn {
                 })
             }
 
-            // ---- Legacy flat nullable types ----------------------------------
-            Self::NullablePrim { present, values } => {
-                let compact_offset = present[..start].iter().filter(|&&p| p).count();
-                let n_present = present[start..start + len].iter().filter(|&&p| p).count();
-                let new_values = values.slice(compact_offset, n_present)?;
-                Ok(Self::NullablePrim {
-                    present: present[start..start + len].to_vec(),
-                    values: new_values,
-                })
-            }
-
-            Self::NullableUtf8 { present, strings } => {
-                let compact_offset = present[..start].iter().filter(|&&p| p).count();
-                let n_present = present[start..start + len].iter().filter(|&&p| p).count();
-                Ok(Self::NullableUtf8 {
-                    present: present[start..start + len].to_vec(),
-                    strings: strings[compact_offset..compact_offset + n_present].to_vec(),
-                })
-            }
-
-            Self::NullableBinary { present, blobs } => {
-                let compact_offset = present[..start].iter().filter(|&&p| p).count();
-                let n_present = present[start..start + len].iter().filter(|&&p| p).count();
-                Ok(Self::NullableBinary {
-                    present: present[start..start + len].to_vec(),
-                    blobs: blobs[compact_offset..compact_offset + n_present].to_vec(),
-                })
-            }
-
             // ---- Dictionary — dictionary stays intact; slice the indices ------
             Self::Dictionary {
                 dictionary,
@@ -2683,38 +2358,6 @@ impl LogicalColumn {
                 dictionary: dictionary.clone(),
                 indices: indices[start..start + len].to_vec(),
             }),
-
-            // ---- Legacy flat array types -------------------------------------
-            Self::ArrayOf { offsets, values } => {
-                let base = offsets[start] as usize;
-                let end = offsets[start + len] as usize;
-                let value_len = end - base;
-                let new_values = values.slice(base, value_len)?;
-                let base32 = offsets[start];
-                let new_offsets: Vec<u32> = offsets[start..=start + len]
-                    .iter()
-                    .map(|&o| o - base32)
-                    .collect();
-                Ok(Self::ArrayOf {
-                    offsets: new_offsets,
-                    values: new_values,
-                })
-            }
-
-            Self::ArrayOfUtf8 { offsets, strings } => {
-                // offsets has len = row_count + 1; strings is flat per element.
-                let base = offsets[start] as usize;
-                let end = offsets[start + len] as usize;
-                let base32 = offsets[start];
-                let new_offsets: Vec<u32> = offsets[start..=start + len]
-                    .iter()
-                    .map(|&o| o - base32)
-                    .collect();
-                Ok(Self::ArrayOfUtf8 {
-                    offsets: new_offsets,
-                    strings: strings[base..end].to_vec(),
-                })
-            }
         }
     }
 }
