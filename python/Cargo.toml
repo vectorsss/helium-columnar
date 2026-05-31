@@ -11,11 +11,22 @@ name = "pyhelium"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Path dep on the main helium crate — default features give us schema-avro,
-# which is sufficient for compress/decompress and file I/O.
+# Path dep on the main helium crate. We turn OFF default features (which would
+# pull schema-avro) and turn ON `arrow` — the only feature pyhelium needs. The
+# arrow bridge (LogicalColumn <-> ArrayRef) is what powers the pyarrow / pandas
+# interop in `read_table` / `write_table`.
 # Package is `helium-columnar`; imported as `helium`.
-helium = { path = "..", package = "helium-columnar", default-features = true }
+helium = { path = "..", package = "helium-columnar", default-features = false, features = ["arrow"] }
 # PyO3 with the extension-module feature required for cdylib builds.
-pyo3 = { version = "0.23", features = ["extension-module"] }
-# numpy crate bridges PyO3 ↔ ndarray ↔ numpy arrays.
-numpy = { version = "0.23" }
+# Pinned to 0.24 to match the version `arrow`'s `pyarrow` feature depends on —
+# a single pyo3 in the tree is required for the extension-module to link.
+# `abi3-py39` builds a single stable-ABI wheel that loads on CPython >=3.9
+# (one wheel per platform instead of one per Python minor version).
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39"] }
+# numpy crate bridges PyO3 <-> ndarray <-> numpy arrays. 0.24 tracks pyo3 0.24.
+numpy = { version = "0.24" }
+# arrow with the `pyarrow` feature provides the Arrow C Data Interface FFI
+# (RecordBatch / Schema / ArrayData <-> pyarrow). Pinned to the same major (55)
+# the helium crate uses so the `ArrayRef` / `RecordBatch` types are identical
+# across the FFI boundary.
+arrow = { version = "55", default-features = false, features = ["pyarrow"] }

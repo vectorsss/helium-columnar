@@ -52,9 +52,11 @@ randomly addressable.
 
 The two language bindings live in `python/` and `duckdb/` as independent Cargo
 projects (path-deps on `helium-columnar`, not published, gated by the `bindings`
-CI job). They are deliberately asymmetric today: **pyhelium** can *write* but
-only flat numeric/string/binary columns; **helium-duckdb** can *read* the full
-v3 type set but cannot write or push down. Each has one decisive next step.
+CI job). **helium-duckdb** can *read* the full v3 type set but cannot write or
+push down — that is its decisive next step. **pyhelium** has gained Arrow /
+pandas interop: `write_table` / `read_table` round-trip nullable, nested
+(Struct / List), and semantic (Date / Datetime / Decimal) columns, with
+optimizer-chosen encodings and streaming / projected reads.
 
 ### helium-duckdb — pushdown status
 
@@ -97,26 +99,39 @@ of that gap is now closed; what landed and what remains:
 
 ### pyhelium — Arrow / pandas interop
 
-The binding only moves numeric `ndarray`s and `list[str]`/`list[bytes]` today,
-with hardcoded pipelines. The decisive step is **Arrow interop**
-(`read_he() -> pyarrow.Table`, `write_he(df)`): reusing Helium's `arrow` bridge
-lifts the flat-only limitation in one move, bringing nullable, nested, and
-semantic (Date/Datetime/Decimal) columns along for free. Then:
+**Done.** `write_table(table_or_df)` / `read_table() -> pyarrow.Table` reuse
+Helium's `arrow` bridge over the Arrow C Data Interface, lifting the old
+flat-only limit: nullable, nested (Struct / List), and semantic
+(Date / Datetime / Decimal) columns round-trip. The original numpy API
+(`compress` / `decompress`, `write_he` / `read_he`) is unchanged. Also landed:
 
-- **Encoding control.** Expose the optimizer / coder specs so Python users get
-  Helium's actual compression wins instead of fixed defaults.
-- **Streaming + projection.** Chunked (multi-stripe) writes and projected,
-  by-stripe reads for bounded memory on large files (`read_he` is whole-file,
-  in-memory today).
-- **Packaging.** abi3 wheels + a `cibuildwheel` matrix + PyPI publishing
-  (currently source-only via `maturin`).
+- **Encoding control.** `write_table` runs Helium's optimizer by default
+  (smallest measured pipeline per column); `optimize=False` selects fast
+  defaults.
+- **Streaming + projection.** `write_table(..., stripe_rows=N)` writes in
+  bounded-memory stripes; `read_table(..., columns=[...], stripe_range=(a, b))`
+  decodes only the requested columns / stripes.
+- **Packaging.** abi3 wheels (`cp39-abi3`, one per platform) + a `cibuildwheel`
+  matrix and a `pyhelium-wheels.yml` workflow; PyPI publishing is prepared and
+  documented in `python/PACKAGING.md` but left disabled until the project is
+  registered.
+
+Remaining:
+
+- **Map columns** do not yet round-trip through a `.he` file — the value
+  logical type is paired with the key column variant on read. This is a
+  main-crate Map/Arrow composition gap (the `read_record_batch` tests have no
+  Map coverage), not a binding issue; the binding test is marked `xfail`.
+- **Dictionary-encoding control** — exposing dict encoding as a Python option.
+- Turning on the **PyPI publish** job once the package is registered.
 
 ### Shared
 
 - **Benchmarks.** Neither binding has throughput/latency numbers. The DuckDB
   numbers are only meaningful *after* pushdown lands, so sequence it that way.
 - **CI depth.** Upgrade the duckdb compile gate to a real load+query smoke over
-  a DuckDB-version matrix; add a pyhelium wheel-build matrix.
+  a DuckDB-version matrix. The pyhelium wheel-build matrix now exists
+  (`pyhelium-wheels.yml`, opt-in on demand / on a `pyhelium-v*` tag).
 
 ## Memory
 
