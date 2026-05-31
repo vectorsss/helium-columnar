@@ -510,10 +510,10 @@ fn make_zero_row(lt: &LogicalType) -> Result<LogicalColumn> {
             offsets: vec![0, 0],
             values: Box::new(make_empty_inner_for_list(lt)?),
         },
-        LogicalType::Map { .. } => LogicalColumn::Map {
+        LogicalType::Map { key, value } => LogicalColumn::Map {
             offsets: vec![0, 0],
-            keys: Box::new(make_empty_inner_for_list(lt)?),
-            values: Box::new(make_empty_inner_for_list(lt)?),
+            keys: Box::new(make_empty_col(key)),
+            values: Box::new(make_empty_col(value)),
         },
         LogicalType::Nullable { inner } => LogicalColumn::Nullable {
             present: vec![false],
@@ -588,9 +588,25 @@ fn make_empty_col(lt: &LogicalType) -> LogicalColumn {
         }),
         LogicalType::Utf8 => LogicalColumn::Utf8(vec![]),
         LogicalType::Binary => LogicalColumn::Binary(vec![]),
-        LogicalType::List { .. } => LogicalColumn::List {
+        LogicalType::List { inner } => LogicalColumn::List {
             offsets: vec![0],
-            values: Box::new(make_empty_col(lt)),
+            values: Box::new(make_empty_col(inner)),
+        },
+        LogicalType::Map { key, value } => LogicalColumn::Map {
+            offsets: vec![0],
+            keys: Box::new(make_empty_col(key)),
+            values: Box::new(make_empty_col(value)),
+        },
+        LogicalType::Nullable { inner } => LogicalColumn::Nullable {
+            present: vec![],
+            value: Box::new(make_empty_col(inner)),
+        },
+        LogicalType::Union { variants } => LogicalColumn::Union {
+            tags: vec![],
+            variants: variants
+                .iter()
+                .map(|(n, v_lt)| (n.clone(), make_empty_col(v_lt)))
+                .collect(),
         },
         LogicalType::Struct { fields } => LogicalColumn::Struct {
             fields: fields
