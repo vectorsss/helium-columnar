@@ -112,6 +112,26 @@ beats `csv.zst` once there are enough rows to amortize per-column framing
 (≥ ~100k; at small caps the lighter formats can win — see *When NOT to use
 Helium* in the README).
 
+## `donext_format_comparison.py` — helium vs parquet vs orc vs zstd
+
+Writes the first N rows of every DoNext CSV as Helium (optimizer-chosen
+encodings), Parquet (pyarrow, zstd level 3), ORC (pyarrow, zstd), and `csv.zst`
+(raw zstd-3 baseline), all in a single row-group/stripe so the stripe size is
+identical across the three columnar formats. Prints a per-file table of
+compression ratios and Helium's size advantage vs Parquet/ORC.
+
+```bash
+cargo build --release --features cli
+pip install pyarrow            # ORC writing needs pyarrow (no Rust ORC writer)
+python3 scripts/donext_format_comparison.py /path/to/DoNext 100000
+```
+
+Args: `<dataset_dir> [n_rows=100000]`. Both Parquet and Helium are pinned to
+zstd level 3; pyarrow's ORC writer does not expose a zstd level, so the ORC
+column uses Apache ORC's default level (the Parquet comparison is the exact one).
+On the 12 DoNext files (100k rows): Helium is smaller than Parquet on 11/12
+(median ~13%, up to 58%) and smaller than ORC on 10/12 (median ~9%).
+
 ## `csv_to_avro.py`
 
 Helper used by the benchmark to encode a CSV as Avro, mirroring a

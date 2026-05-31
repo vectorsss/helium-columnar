@@ -9,10 +9,12 @@
 //! | Physical column type | Default pipeline |
 //! |---|---|
 //! | `U8` — booleans, present bitmaps, union tags | `leb128 → zstd` |
-//! | `I32`, `I64`, `U32`, `U64`, `I8`, `I16`, `U16` | `delta → leb128 → zstd` |
-//! | `F32`, `F64` | `gorilla → zstd` |
+//! | `I8`–`I64`, `U16`–`U64`, `F32`, `F64` — numeric **data** | `pcodec` |
 //! | `Bytes` — string/binary data payloads | `zstd` |
 //! | `U32` offsets (list, map, utf8, binary) | `delta → leb128 → zstd` |
+//!
+//! Numeric data columns default to `pcodec`, which adapts per chunk internally
+//! (no monotonic/time-series assumption); monotonic `offsets` keep `delta`.
 //!
 //! Composite types prepend one header encoding (offsets/present/tag) then
 //! extend with the inner type's encodings.  [`crate::LogicalType::Struct`] always
@@ -88,23 +90,23 @@ pub fn default_encodings(lt: &LogicalType) -> Vec<Vec<CoderSpec>> {
 // Internal helpers (exported pub(crate) for use in adapter modules)
 // ---------------------------------------------------------------------------
 
-/// Pipeline for a primitive integer or float physical type.
+/// Pipeline for a primitive integer or float **data** physical type.
+///
+/// Numeric data columns default to `pcodec`. pcodec adapts internally per chunk
+/// (choosing mode/bit-width itself, with no monotonic or time-series
+/// assumption), which is a far better blanket default than blindly `delta`-coding
+/// every integer (harmful on non-sorted data) or `gorilla`-coding every float.
+/// The optimizer can still pick a different per-column pipeline when measured.
+///
+/// Note: this is for *data* leaves only — monotonic `offsets` keep `delta`
+/// (see [`offset_coders`]).
 pub(crate) fn prim_coders(dt: DataType) -> Vec<CoderSpec> {
     match dt {
-        DataType::F32 | DataType::F64 => {
-            // gorilla XOR-encodes consecutive floats → Bytes, then zstd compresses.
-            vec![CoderSpec::new("gorilla"), CoderSpec::new("zstd")]
-        }
+        // present bitmaps / union tags / booleans surface as U8; they don't
+        // benefit from pcodec's numeric modes — keep the light boolean pipeline.
         DataType::U8 => u8_coders(),
-        _ => {
-            // I8, I16, I32, I64, U16, U32, U64:
-            // delta → leb128 (integer → Bytes) → zstd.
-            vec![
-                CoderSpec::new("delta"),
-                CoderSpec::new("leb128"),
-                CoderSpec::new("zstd"),
-            ]
-        }
+        // I8/I16/I32/I64/U16/U32/U64 + F32/F64 — pcodec handles them all.
+        _ => vec![CoderSpec::new("pcodec")],
     }
 }
 
