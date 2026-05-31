@@ -1194,3 +1194,147 @@ fn optimize_zstd_level_global_override() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Automatic dictionary promotion
+// ---------------------------------------------------------------------------
+
+fn is_dictionary(lt: &LogicalType) -> bool {
+    matches!(lt, LogicalType::Dictionary { .. })
+}
+
+#[test]
+fn optimize_promotes_low_cardinality_utf8_to_dict() {
+    // 100k rows drawn from ~10 distinct strings → dict should win.
+    let palette: Vec<String> = (0..10).map(|i| format!("category_{i}")).collect();
+    let strings: Vec<String> = (0..100_000)
+        .map(|i| palette[i % palette.len()].clone())
+        .collect();
+    let lc = LogicalColumn::Utf8(strings.clone());
+    let lt = LogicalType::Utf8;
+
+    let schema = Optimizer::new()
+        .optimize(vec![("cat".into(), lt, lc)])
+        .expect("optimize");
+    let spec = &schema.columns[0];
+    assert!(
+        is_dictionary(&spec.logical_type),
+        "low-cardinality Utf8 should be promoted to Dictionary, got {:?}",
+        spec.logical_type
+    );
+    // Dictionary{Utf8} = offsets + data + indices = 3 encoding vectors.
+    assert_eq!(spec.encodings.len(), spec.logical_type.expected_encodings_len());
+
+    // Round-trips with value equality.
+    let result = roundtrip_spec(spec, LogicalColumn::dict_encode_utf8(strings.clone()));
+    let materialized = result.materialize_dict_utf8().expect("materialize dict utf8");
+    assert_eq!(materialized, strings);
+}
+
+#[test]
+fn optimize_keeps_high_cardinality_utf8_plain() {
+    // All distinct → dict cannot help; must stay plain Utf8.
+    let strings: Vec<String> = (0..50_000).map(|i| format!("unique_value_{i:08}")).collect();
+    let lc = LogicalColumn::Utf8(strings.clone());
+    let lt = LogicalType::Utf8;
+
+    let schema = Optimizer::new()
+        .optimize(vec![("uniq".into(), lt, lc)])
+        .expect("optimize");
+    let spec = &schema.columns[0];
+    assert!(
+        matches!(spec.logical_type, LogicalType::Utf8),
+        "high-cardinality Utf8 must stay plain, got {:?}",
+        spec.logical_type
+    );
+    assert_eq!(spec.encodings.len(), 2);
+
+    let result = roundtrip_spec(spec, LogicalColumn::Utf8(strings.clone()));
+    assert_eq!(result, LogicalColumn::Utf8(strings));
+}
+
+#[test]
+fn optimize_promotes_low_cardinality_i64_to_dict() {
+    // 100k rows drawn from 256 distinct, widely-spread 64-bit codes selected in
+    // pseudo-random order. With 256 symbols the dictionary indices pack into a
+    // single byte each, while plain pcodec must pay for the wide 64-bit values on
+    // every row — so the dict variant wins decisively on size.
+    //
+    // (At very low cardinality, e.g. <16 distinct, pcodec alone already matches
+    // the dict; this is expected — pcodec covers low-cardinality numerics, which
+    // is why dict promotion is measurement-gated rather than forced.)
+    const N_DISTINCT: u64 = 256;
+    let codes: Vec<i64> = (0..N_DISTINCT)
+        .map(|i| 0x4000_0000_0000_0000i64 ^ (i as i64).wrapping_mul(0x9E37_79B9_7F4A_7C15u64 as i64))
+        .collect();
+    let mut state: u64 = 0x1234_5678_9ABC_DEF0;
+    let values: Vec<i64> = (0..100_000)
+        .map(|_| {
+            // xorshift64 to pick a code index without an exploitable cycle.
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            codes[(state % N_DISTINCT) as usize]
+        })
+        .collect();
+    let lc = LogicalColumn::Primitive(ColumnData::I64(values.clone()));
+    let lt = LogicalType::Primitive {
+        data_type: DataType::I64,
+    };
+
+    let schema = Optimizer::new()
+        .optimize(vec![("code".into(), lt, lc)])
+        .expect("optimize");
+    let spec = &schema.columns[0];
+    assert!(
+        is_dictionary(&spec.logical_type),
+        "low-cardinality I64 should be promoted to Dictionary, got {:?}",
+        spec.logical_type
+    );
+    assert_eq!(spec.encodings.len(), spec.logical_type.expected_encodings_len());
+
+    // Round-trips with value equality.
+    let result = roundtrip_spec(
+        spec,
+        LogicalColumn::dict_encode_primitive(ColumnData::I64(values.clone()))
+            .expect("dict_encode_primitive"),
+    );
+    // Materialize the dict back to a flat primitive column and compare.
+    if let LogicalColumn::Dictionary {
+        dictionary,
+        indices,
+    } = result
+    {
+        if let LogicalColumn::Primitive(ColumnData::I64(dict)) = *dictionary {
+            let flat: Vec<i64> = indices.iter().map(|&i| dict[i as usize]).collect();
+            assert_eq!(flat, values);
+        } else {
+            panic!("expected Primitive(I64) dictionary");
+        }
+    } else {
+        panic!("expected Dictionary column from round-trip");
+    }
+}
+
+#[test]
+fn optimize_keeps_high_cardinality_i64_plain() {
+    // All distinct → stays plain Primitive(I64).
+    let values: Vec<i64> = (0..50_000).map(|i| i * 991 + 7).collect();
+    let lc = LogicalColumn::Primitive(ColumnData::I64(values.clone()));
+    let lt = LogicalType::Primitive {
+        data_type: DataType::I64,
+    };
+
+    let schema = Optimizer::new()
+        .optimize(vec![("uniq".into(), lt, lc)])
+        .expect("optimize");
+    let spec = &schema.columns[0];
+    assert!(
+        matches!(spec.logical_type, LogicalType::Primitive { .. }),
+        "high-cardinality I64 must stay plain, got {:?}",
+        spec.logical_type
+    );
+
+    let result = roundtrip_spec(spec, LogicalColumn::Primitive(ColumnData::I64(values.clone())));
+    assert_eq!(result, LogicalColumn::Primitive(ColumnData::I64(values)));
+}

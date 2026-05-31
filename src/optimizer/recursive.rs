@@ -10,13 +10,27 @@
 //! [`optimize_column`] wraps this into a full [`ColumnSpec`].
 
 use crate::{
-    CoderRegistry, CoderSpec, ColumnData, ColumnSpec, DateUnit, FieldSpec, HeliumError,
+    CoderRegistry, CoderSpec, ColumnData, ColumnSpec, DataType, DateUnit, FieldSpec, HeliumError,
     LogicalColumn, LogicalType,
 };
 
 type Result<T> = std::result::Result<T, HeliumError>;
 
+use super::candidates::{distinct_i32, distinct_i64, distinct_str};
+use super::measure_encoding;
 use super::picker::pick_best_leaf;
+
+/// Upper bound on the number of distinct values for which a column is still a
+/// dictionary candidate. The actual limit is `min(row_count / 2, MAX)`: a
+/// column whose values are at least half-unique cannot benefit from dictionary
+/// encoding (the index column alone would cost ~as much as the data), and the
+/// 65 536 ceiling keeps the cardinality probe cheap on high-cardinality data —
+/// the `distinct_*` helpers early-exit the moment the limit is exceeded.
+const DICT_CARDINALITY_MAX: usize = 65_536;
+
+/// Columns shorter than this are skipped entirely: per-column framing overhead
+/// dominates and dictionary encoding cannot pay for the extra index leaf.
+const DICT_MIN_ROWS: usize = 64;
 
 /// Recursively pick optimal encodings for `lt` using `lc` as sample data.
 ///
@@ -36,13 +50,50 @@ pub fn optimize_type(
     registry: &CoderRegistry,
     context: &str,
 ) -> Result<(LogicalType, Vec<Vec<CoderSpec>>)> {
+    // Top-level entry: dictionary promotion is allowed.
+    optimize_type_inner(lt, lc, terminal, registry, context, true)
+}
+
+/// Internal worker for [`optimize_type`].
+///
+/// `dict_allowed` is `false` in positions where a `Dictionary<T>` leaf would be
+/// structurally illegal — notably **Map keys**, which the writer requires to be
+/// `Primitive`/`Utf8`/`Binary`. The flag is reset to `true` whenever recursion
+/// descends into a position that *can* hold a dictionary (struct fields, list /
+/// map values, nullable / union inner).
+fn optimize_type_inner(
+    lt: LogicalType,
+    lc: LogicalColumn,
+    terminal: &CoderSpec,
+    registry: &CoderRegistry,
+    context: &str,
+    dict_allowed: bool,
+) -> Result<(LogicalType, Vec<Vec<CoderSpec>>)> {
     match (lt, lc) {
         // ----------------------------------------------------------------
         // Primitive leaf
         // ----------------------------------------------------------------
         (LogicalType::Primitive { data_type }, LogicalColumn::Primitive(cd)) => {
-            let coders = pick_best_leaf("values", cd, terminal, registry, context)?;
-            Ok((LogicalType::Primitive { data_type }, vec![coders]))
+            // Plain variant (always valid).
+            let plain_lt = LogicalType::Primitive { data_type };
+            let plain_coders = pick_best_leaf("values", cd.clone(), terminal, registry, context)?;
+            let plain = (plain_lt, vec![plain_coders]);
+
+            // Try dictionary promotion for integer leaves only (floats are poor
+            // dict candidates and pcodec already covers low-cardinality numerics).
+            if dict_allowed
+                && is_dict_candidate_int(&cd)
+                && let Some(dict) = try_dict_primitive(&cd, data_type, terminal, registry, context)?
+            {
+                return pick_smaller_variant(
+                    plain,
+                    dict,
+                    LogicalColumn::Primitive(cd),
+                    registry,
+                    context,
+                );
+            }
+            Ok(plain)
         }
 
         // ----------------------------------------------------------------
@@ -67,7 +118,31 @@ pub fn optimize_type(
                 registry,
                 context,
             )?;
-            Ok((LogicalType::Utf8, vec![off_enc, data_enc]))
+            let plain = (LogicalType::Utf8, vec![off_enc, data_enc]);
+
+            // Try dictionary promotion when cardinality is low.
+            let limit = dict_limit(strings.len());
+            if dict_allowed && limit > 0 && distinct_str(&strings, limit).is_some() {
+                let dict_col = LogicalColumn::dict_encode_utf8(strings.clone());
+                let dict_lt = LogicalType::Dictionary {
+                    inner: Box::new(LogicalType::Utf8),
+                };
+                let dict = optimize_type(
+                    dict_lt,
+                    dict_col,
+                    terminal,
+                    registry,
+                    &format!("{context}[dict-candidate]"),
+                )?;
+                return pick_smaller_variant(
+                    plain,
+                    dict,
+                    LogicalColumn::Utf8(strings),
+                    registry,
+                    context,
+                );
+            }
+            Ok(plain)
         }
 
         // ----------------------------------------------------------------
@@ -126,8 +201,14 @@ pub fn optimize_type(
                     });
                 }
                 let field_ctx = format!("{context}.{}", spec_f.name);
-                let (updated_lt, encodings) =
-                    optimize_type(spec_f.logical_type, col_lc, terminal, registry, &field_ctx)?;
+                let (updated_lt, encodings) = optimize_type_inner(
+                    spec_f.logical_type,
+                    col_lc,
+                    terminal,
+                    registry,
+                    &field_ctx,
+                    true,
+                )?;
                 new_fields.push(FieldSpec::new(spec_f.name, updated_lt, encodings));
             }
             Ok((LogicalType::Struct { fields: new_fields }, vec![]))
@@ -146,7 +227,7 @@ pub fn optimize_type(
             )?;
             let inner_ctx = format!("{context}[item]");
             let (updated_inner, inner_encs) =
-                optimize_type(*inner, *values, terminal, registry, &inner_ctx)?;
+                optimize_type_inner(*inner, *values, terminal, registry, &inner_ctx, true)?;
             let mut encodings = vec![off_enc];
             encodings.extend(inner_encs);
             Ok((
@@ -177,9 +258,11 @@ pub fn optimize_type(
             )?;
             let key_ctx = format!("{context}[key]");
             let val_ctx = format!("{context}[value]");
-            let (updated_key, key_encs) = optimize_type(*key, *keys, terminal, registry, &key_ctx)?;
+            // Map keys must remain Primitive/Utf8/Binary — never promote to Dictionary.
+            let (updated_key, key_encs) =
+                optimize_type_inner(*key, *keys, terminal, registry, &key_ctx, false)?;
             let (updated_value, val_encs) =
-                optimize_type(*value, *values, terminal, registry, &val_ctx)?;
+                optimize_type_inner(*value, *values, terminal, registry, &val_ctx, true)?;
             let mut encodings = vec![off_enc];
             encodings.extend(key_encs);
             encodings.extend(val_encs);
@@ -206,7 +289,7 @@ pub fn optimize_type(
             )?;
             let inner_ctx = format!("{context}[nullable]");
             let (updated_inner, inner_encs) =
-                optimize_type(*inner, *value, terminal, registry, &inner_ctx)?;
+                optimize_type_inner(*inner, *value, terminal, registry, &inner_ctx, true)?;
             let mut encodings = vec![pres_enc];
             encodings.extend(inner_encs);
             Ok((
@@ -255,7 +338,7 @@ pub fn optimize_type(
                 }
                 let v_ctx = format!("{context}[union:{v_name}]");
                 let (updated_v_lt, v_encs) =
-                    optimize_type(v_lt, col_v_lc, terminal, registry, &v_ctx)?;
+                    optimize_type_inner(v_lt, col_v_lc, terminal, registry, &v_ctx, true)?;
                 encodings.extend(v_encs);
                 new_variants.push((v_name, updated_v_lt));
             }
@@ -356,10 +439,13 @@ pub fn optimize_type(
                 indices,
             },
         ) => {
-            // Optimize inner type for the dictionary column.
+            // Optimize inner type for the dictionary column. dict_allowed = false:
+            // the dictionary values are already unique by construction, so nesting
+            // a second Dictionary inside them is never a win and the inner leaf
+            // (Utf8 / Primitive) must stay plain.
             let inner_ctx = format!("{context}[dict]");
             let (updated_inner, inner_encs) =
-                optimize_type(*inner, *dictionary, terminal, registry, &inner_ctx)?;
+                optimize_type_inner(*inner, *dictionary, terminal, registry, &inner_ctx, false)?;
             // Optimize the indices leaf.
             let idx_enc = pick_best_leaf(
                 "indices",
@@ -403,6 +489,126 @@ pub fn optimize_column(
 ) -> Result<ColumnSpec> {
     let (updated_lt, encodings) = optimize_type(lt, lc, terminal, registry, name)?;
     Ok(ColumnSpec::new(name, updated_lt, encodings))
+}
+
+// ---------------------------------------------------------------------------
+// Dictionary-promotion helpers
+// ---------------------------------------------------------------------------
+
+/// The distinct-count limit for a column of `row_count` rows, or `0` if the
+/// column is too small to be a dictionary candidate at all.
+///
+/// A column only benefits from dict encoding when its values repeat heavily, so
+/// we cap the distinct count at `row_count / 2` (above that the index leaf costs
+/// roughly as much as the data) and at [`DICT_CARDINALITY_MAX`] (keeps the probe
+/// cheap). Columns under [`DICT_MIN_ROWS`] are excluded.
+fn dict_limit(row_count: usize) -> usize {
+    if row_count < DICT_MIN_ROWS {
+        return 0;
+    }
+    (row_count / 2).min(DICT_CARDINALITY_MAX)
+}
+
+/// Whether `cd` is an integer column eligible for dictionary promotion **and**
+/// passes the cheap cardinality gate. Floats and bytes are never candidates.
+fn is_dict_candidate_int(cd: &ColumnData) -> bool {
+    let limit = dict_limit(cd.len());
+    if limit == 0 {
+        return false;
+    }
+    match cd {
+        ColumnData::I8(v) => distinct_i32(&v.iter().map(|&x| x as i32).collect::<Vec<_>>(), limit),
+        ColumnData::I16(v) => distinct_i32(&v.iter().map(|&x| x as i32).collect::<Vec<_>>(), limit),
+        ColumnData::I32(v) => distinct_i32(v, limit),
+        ColumnData::I64(v) => distinct_i64(v, limit),
+        ColumnData::U8(v) => distinct_i64(&v.iter().map(|&x| x as i64).collect::<Vec<_>>(), limit),
+        ColumnData::U16(v) => distinct_i64(&v.iter().map(|&x| x as i64).collect::<Vec<_>>(), limit),
+        ColumnData::U32(v) => distinct_i64(&v.iter().map(|&x| x as i64).collect::<Vec<_>>(), limit),
+        // u64 may exceed i64 range; build the distinct set inline with the same limit.
+        ColumnData::U64(v) => distinct_u64(v, limit),
+        ColumnData::F32(_) | ColumnData::F64(_) | ColumnData::Bytes(_) => None,
+    }
+    .is_some()
+}
+
+/// Returns the number of distinct U64 values if ≤ `limit`, else `None`.
+/// (`distinct_i64` would lose the top half of the u64 range to truncation.)
+fn distinct_u64(values: &[u64], limit: usize) -> Option<usize> {
+    let mut set = std::collections::HashSet::new();
+    for &v in values {
+        set.insert(v);
+        if set.len() > limit {
+            return None;
+        }
+    }
+    Some(set.len())
+}
+
+/// Build and optimize the dictionary variant of an integer primitive column.
+///
+/// Returns `Ok(None)` if `cd` cannot be dictionary-encoded (e.g. non-integer —
+/// already filtered, but kept defensive). The cardinality gate is assumed to
+/// have passed at the call site.
+fn try_dict_primitive(
+    cd: &ColumnData,
+    data_type: DataType,
+    terminal: &CoderSpec,
+    registry: &CoderRegistry,
+    context: &str,
+) -> Result<Option<(LogicalType, Vec<Vec<CoderSpec>>)>> {
+    let dict_col = match LogicalColumn::dict_encode_primitive(cd.clone()) {
+        Ok(c) => c,
+        // Non-integer input — not a candidate. (Unreachable given the gate.)
+        Err(_) => return Ok(None),
+    };
+    let dict_lt = LogicalType::Dictionary {
+        inner: Box::new(LogicalType::Primitive { data_type }),
+    };
+    let dict = optimize_type(
+        dict_lt,
+        dict_col,
+        terminal,
+        registry,
+        &format!("{context}[dict-candidate]"),
+    )?;
+    Ok(Some(dict))
+}
+
+/// Measure both encoded variants of a column against the original sample data
+/// and return whichever produces fewer bytes (plain on a tie, to avoid the
+/// dictionary's extra runtime indirection when there is no size win).
+fn pick_smaller_variant(
+    plain: (LogicalType, Vec<Vec<CoderSpec>>),
+    dict: (LogicalType, Vec<Vec<CoderSpec>>),
+    original: LogicalColumn,
+    registry: &CoderRegistry,
+    context: &str,
+) -> Result<(LogicalType, Vec<Vec<CoderSpec>>)> {
+    let plain_spec = ColumnSpec::new(context, plain.0.clone(), plain.1.clone());
+    let plain_size = measure_encoding(&plain_spec, original.clone(), registry)?;
+
+    // The dict variant must be measured against the dict-encoded column, not the
+    // plain one. Rebuild it from the same source so both measurements are honest.
+    let dict_original = match &dict.0 {
+        LogicalType::Dictionary { inner } => match (inner.as_ref(), &original) {
+            (LogicalType::Utf8, LogicalColumn::Utf8(strings)) => {
+                LogicalColumn::dict_encode_utf8(strings.clone())
+            }
+            (LogicalType::Primitive { .. }, LogicalColumn::Primitive(cd)) => {
+                LogicalColumn::dict_encode_primitive(cd.clone())?
+            }
+            _ => return Ok(plain),
+        },
+        _ => return Ok(plain),
+    };
+    let dict_spec = ColumnSpec::new(context, dict.0.clone(), dict.1.clone());
+    let dict_size = measure_encoding(&dict_spec, dict_original, registry)?;
+
+    if dict_size < plain_size {
+        Ok(dict)
+    } else {
+        Ok(plain)
+    }
 }
 
 // ---------------------------------------------------------------------------

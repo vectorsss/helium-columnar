@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use helium::CoderRegistry;
-use helium::optimizer::{Optimizer, measure_encoding};
+use helium::optimizer::{Optimizer, measure_encoding, reshape_to_schema_type};
 
 /// Run the `compare` subcommand.
 ///
@@ -57,13 +57,14 @@ pub fn run(input: &Path, codecs: &[String], delimiter: u8) -> anyhow::Result<()>
 
         let mut total_encoded = 0usize;
         for (i, (_, _, lc)) in data.iter().enumerate() {
-            let bytes =
-                measure_encoding(&schema.columns[i], lc.clone(), &registry).with_context(|| {
-                    format!(
-                        "measuring column '{}' with codec '{codec}'",
-                        schema.columns[i].name
-                    )
-                })?;
+            // The optimizer may promote a column to Dictionary; reshape the
+            // source column to match the optimized schema before measuring.
+            let spec = &schema.columns[i];
+            let reshaped = reshape_to_schema_type(lc.clone(), &spec.logical_type)
+                .with_context(|| format!("reshaping column '{}' for codec '{codec}'", spec.name))?;
+            let bytes = measure_encoding(spec, reshaped, &registry).with_context(|| {
+                format!("measuring column '{}' with codec '{codec}'", spec.name)
+            })?;
             total_encoded += bytes;
         }
 

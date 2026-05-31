@@ -1455,39 +1455,51 @@ fn build_optimized_schema(dataset: &FlatDataset) -> Schema {
     Optimizer::new().optimize(triples).expect("optimizer")
 }
 
+/// Fetch a dataset column reshaped to match `schema_col`'s logical type.
+///
+/// The optimizer may promote a column to `Dictionary`; this dict-encodes the
+/// source column so it matches the (possibly optimized) write schema. For the
+/// default schema this is a no-op.
+fn col_for(schema_col: &helium::ColumnSpec, dataset: &FlatDataset) -> LogicalColumn {
+    helium::optimizer::reshape_to_schema_type(
+        dataset.columns[&schema_col.name].clone(),
+        &schema_col.logical_type,
+    )
+    .expect("reshape dataset column to schema type")
+}
+
 fn write_helium(schema: Schema, dataset: &FlatDataset, label: &str) -> HeliumMeasure {
     let registry = CoderRegistry::default();
     let tmp = tempfile::NamedTempFile::new().expect("tempfile self-contained");
 
-    let col_names: Vec<String> = schema.columns.iter().map(|s| s.name.clone()).collect();
+    // Reshape source columns to the (possibly optimized → Dictionary) schema.
+    let write_cols: Vec<(String, LogicalColumn)> = schema
+        .columns
+        .iter()
+        .map(|s| (s.name.clone(), col_for(s, dataset)))
+        .collect();
     let mut writer = HeliumWriter::new(
         tmp.as_file().try_clone().expect("clone file self-contained"),
         schema,
         &registry,
     )
     .expect("HeliumWriter::new");
-    for name in &col_names {
-        let lc = dataset.columns[name].clone();
-        writer.write_column(name, lc).expect("write_column self-contained");
+    for (name, lc) in &write_cols {
+        writer
+            .write_column(name, lc.clone())
+            .expect("write_column self-contained");
     }
     writer.finish().expect("finish self-contained");
 
-    // Round-trip verification
+    // Round-trip verification (compare against the reshaped expected columns).
     {
         let f = std::fs::File::open(tmp.path()).expect("open he self-contained");
         let registry2 = CoderRegistry::default();
         let mut reader = HeliumReader::new(f, &registry2).expect("HeliumReader self-contained");
-        let schema_clone = reader
-            .schema()
-            .columns
-            .iter()
-            .map(|s| s.name.clone())
-            .collect::<Vec<_>>();
-        for name in &schema_clone {
+        for (name, expected) in &write_cols {
             let decoded = reader.read_column(name).expect("read_column self-contained");
-            let original = &dataset.columns[name];
             assert_eq!(
-                &decoded, original,
+                &decoded, expected,
                 "round-trip mismatch for column '{name}' in {label}"
             );
         }
@@ -1515,7 +1527,14 @@ fn write_helium_multistripe(
     let registry = CoderRegistry::default();
     let tmp = tempfile::NamedTempFile::new().expect("tempfile self-contained multi");
 
-    let col_names: Vec<String> = schema.columns.iter().map(|s| s.name.clone()).collect();
+    // Reshape each source column to the (possibly optimized → Dictionary)
+    // schema type once; slicing a Dictionary keeps the full dictionary and
+    // slices only the indices, so per-stripe writes round-trip correctly.
+    let reshaped: Vec<(String, LogicalColumn)> = schema
+        .columns
+        .iter()
+        .map(|s| (s.name.clone(), col_for(s, dataset)))
+        .collect();
     let mut writer = HeliumWriter::new(
         tmp.as_file().try_clone().expect("clone file self-contained multi"),
         schema,
@@ -1527,8 +1546,8 @@ fn write_helium_multistripe(
     let mut offset = 0usize;
     while offset < total {
         let chunk = stripe_rows.min(total - offset);
-        for name in &col_names {
-            let lc = dataset.columns[name]
+        for (name, col) in &reshaped {
+            let lc = col
                 .slice(offset, chunk)
                 .unwrap_or_else(|e| panic!("slice column '{name}' at {offset}+{chunk}: {e}"));
             writer
@@ -1542,27 +1561,22 @@ fn write_helium_multistripe(
     }
     writer.finish().expect("finish self-contained multi");
 
-    // Round-trip verification: read each stripe back and concatenate, then compare.
+    // Round-trip verification: read each stripe back and verify it matches the
+    // reshaped expected slice.
     {
         let f = std::fs::File::open(tmp.path()).expect("open he self-contained multi");
         let registry2 = CoderRegistry::default();
         let mut reader = HeliumReader::new(f, &registry2).expect("HeliumReader self-contained multi");
         let n_stripes = reader.stripe_count();
-        let schema_cols = reader
-            .schema()
-            .columns
-            .iter()
-            .map(|s| s.name.clone())
-            .collect::<Vec<_>>();
-        for name in &schema_cols {
-            // Collect per-stripe slices and verify they match the dataset slice.
+        for (name, col) in &reshaped {
+            // Collect per-stripe slices and verify they match the reshaped slice.
             let mut global_offset = 0usize;
             for s_idx in 0..n_stripes {
                 let stripe_col = reader
                     .read_column_at_stripe(name, s_idx)
                     .expect("read_column_at_stripe self-contained multi");
                 let stripe_len = stripe_col.row_count();
-                let expected = dataset.columns[name]
+                let expected = col
                     .slice(global_offset, stripe_len)
                     .expect("slice expected self-contained multi");
                 assert_eq!(
@@ -1590,7 +1604,11 @@ fn write_helium_catalog(schema: Schema, dataset: &FlatDataset, label: &str) -> H
     let catalog_dir = tempfile::tempdir().expect("catalog dir");
     let catalog = Catalog::open(catalog_dir.path()).expect("Catalog::open");
 
-    let col_names: Vec<String> = schema.columns.iter().map(|s| s.name.clone()).collect();
+    let reshaped: Vec<(String, LogicalColumn)> = schema
+        .columns
+        .iter()
+        .map(|s| (s.name.clone(), col_for(s, dataset)))
+        .collect();
     let hash = catalog.add_schema(&schema).expect("add_schema");
     let catalog_side_bytes = catalog
         .path_for(&hash)
@@ -1606,9 +1624,10 @@ fn write_helium_catalog(schema: Schema, dataset: &FlatDataset, label: &str) -> H
             &registry,
         )
         .expect("Catalog::open_writer");
-    for name in &col_names {
-        let lc = dataset.columns[name].clone();
-        writer.write_column(name, lc).expect("write_column catalog");
+    for (name, lc) in &reshaped {
+        writer
+            .write_column(name, lc.clone())
+            .expect("write_column catalog");
     }
     writer.finish().expect("finish catalog");
 
@@ -1619,17 +1638,10 @@ fn write_helium_catalog(schema: Schema, dataset: &FlatDataset, label: &str) -> H
         let resolver = catalog.resolver();
         let mut reader =
             HeliumReader::new_with_resolver(f, &registry2, resolver).expect("HeliumReader catalog");
-        let schema_clone = reader
-            .schema()
-            .columns
-            .iter()
-            .map(|s| s.name.clone())
-            .collect::<Vec<_>>();
-        for name in &schema_clone {
+        for (name, expected) in &reshaped {
             let decoded = reader.read_column(name).expect("read_column catalog");
-            let original = &dataset.columns[name];
             assert_eq!(
-                &decoded, original,
+                &decoded, expected,
                 "round-trip mismatch for column '{name}' in {label}"
             );
         }
@@ -1656,7 +1668,11 @@ fn write_helium_catalog_multistripe(
     let catalog_dir = tempfile::tempdir().expect("catalog dir catalog multi");
     let catalog = Catalog::open(catalog_dir.path()).expect("Catalog::open catalog multi");
 
-    let col_names: Vec<String> = schema.columns.iter().map(|s| s.name.clone()).collect();
+    let reshaped: Vec<(String, LogicalColumn)> = schema
+        .columns
+        .iter()
+        .map(|s| (s.name.clone(), col_for(s, dataset)))
+        .collect();
     let hash = catalog.add_schema(&schema).expect("add_schema catalog multi");
     let catalog_side_bytes = catalog
         .path_for(&hash)
@@ -1677,8 +1693,8 @@ fn write_helium_catalog_multistripe(
     let mut offset = 0usize;
     while offset < total {
         let chunk = stripe_rows.min(total - offset);
-        for name in &col_names {
-            let lc = dataset.columns[name]
+        for (name, col) in &reshaped {
+            let lc = col
                 .slice(offset, chunk)
                 .unwrap_or_else(|e| panic!("slice column '{name}' at {offset}+{chunk}: {e}"));
             writer
@@ -1692,7 +1708,7 @@ fn write_helium_catalog_multistripe(
     }
     writer.finish().expect("finish catalog multi");
 
-    // Round-trip verification: read each stripe back and compare vs original slice.
+    // Round-trip verification: read each stripe back and compare vs reshaped slice.
     {
         let f = std::fs::File::open(tmp.path()).expect("open he catalog multi");
         let registry2 = CoderRegistry::default();
@@ -1700,20 +1716,14 @@ fn write_helium_catalog_multistripe(
         let mut reader = HeliumReader::new_with_resolver(f, &registry2, resolver)
             .expect("HeliumReader catalog multi");
         let n_stripes = reader.stripe_count();
-        let schema_cols = reader
-            .schema()
-            .columns
-            .iter()
-            .map(|s| s.name.clone())
-            .collect::<Vec<_>>();
-        for name in &schema_cols {
+        for (name, col) in &reshaped {
             let mut global_offset = 0usize;
             for s_idx in 0..n_stripes {
                 let stripe_col = reader
                     .read_column_at_stripe(name, s_idx)
                     .expect("read_column_at_stripe catalog multi");
                 let stripe_len = stripe_col.row_count();
-                let expected = dataset.columns[name]
+                let expected = col
                     .slice(global_offset, stripe_len)
                     .expect("slice expected catalog multi");
                 assert_eq!(

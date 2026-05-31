@@ -37,7 +37,92 @@ pub mod candidates;
 pub mod picker;
 pub mod recursive;
 
-use crate::{CoderRegistry, CoderSpec, ColumnSpec, LogicalColumn, LogicalType, Result, Schema};
+use crate::{
+    CoderRegistry, CoderSpec, ColumnData, ColumnSpec, LogicalColumn, LogicalType, Result, Schema,
+};
+
+// ---------------------------------------------------------------------------
+// Schema-shape reconciliation
+// ---------------------------------------------------------------------------
+
+/// Reshape a source [`LogicalColumn`] so its physical shape matches `target`.
+///
+/// The optimizer may promote low-cardinality `Utf8` / integer `Primitive` data
+/// columns to `Dictionary<T>` (see [`Optimizer`]). When that happens, callers
+/// holding the *plain* column must dict-encode it before writing or measuring it
+/// against the optimized schema. This helper performs that reconciliation,
+/// recursing through containers (`Nullable`, `List`, `Struct`, `Map` value,
+/// `Union`) so promotions on inner data columns are also reflected.
+///
+/// For any `(target, column)` pair that already matches — or that the optimizer
+/// could not have promoted — the column is returned unchanged.
+pub fn reshape_to_schema_type(lc: LogicalColumn, target: &LogicalType) -> Result<LogicalColumn> {
+    Ok(match (target, lc) {
+        // Plain → Dictionary promotions the optimizer can perform.
+        (LogicalType::Dictionary { inner }, LogicalColumn::Utf8(strings))
+            if matches!(inner.as_ref(), LogicalType::Utf8) =>
+        {
+            LogicalColumn::dict_encode_utf8(strings)
+        }
+        (LogicalType::Dictionary { inner }, LogicalColumn::Primitive(cd))
+            if matches!(inner.as_ref(), LogicalType::Primitive { .. }) =>
+        {
+            // Defensive: dict_encode_primitive only rejects float/bytes, which
+            // the optimizer never promotes. If somehow asked to dict a float
+            // target, leave it plain rather than erroring.
+            if matches!(cd, ColumnData::F32(_) | ColumnData::F64(_) | ColumnData::Bytes(_)) {
+                LogicalColumn::Primitive(cd)
+            } else {
+                LogicalColumn::dict_encode_primitive(cd)?
+            }
+        }
+        // Recurse through containers.
+        (LogicalType::Nullable { inner }, LogicalColumn::Nullable { present, value }) => {
+            LogicalColumn::Nullable {
+                present,
+                value: Box::new(reshape_to_schema_type(*value, inner)?),
+            }
+        }
+        (LogicalType::List { inner }, LogicalColumn::List { offsets, values }) => {
+            LogicalColumn::List {
+                offsets,
+                values: Box::new(reshape_to_schema_type(*values, inner)?),
+            }
+        }
+        (LogicalType::Struct { fields: tfields }, LogicalColumn::Struct { fields: cfields }) => {
+            let mut new_fields = Vec::with_capacity(cfields.len());
+            for ((name, col), fs) in cfields.into_iter().zip(tfields.iter()) {
+                new_fields.push((name, reshape_to_schema_type(col, &fs.logical_type)?));
+            }
+            LogicalColumn::Struct { fields: new_fields }
+        }
+        (
+            LogicalType::Map { value, .. },
+            LogicalColumn::Map {
+                offsets,
+                keys,
+                values,
+            },
+        ) => LogicalColumn::Map {
+            offsets,
+            keys,
+            // Map keys are never promoted; only reshape the value side.
+            values: Box::new(reshape_to_schema_type(*values, value)?),
+        },
+        (LogicalType::Union { variants: tv }, LogicalColumn::Union { tags, variants: cv }) => {
+            let mut new_variants = Vec::with_capacity(cv.len());
+            for ((name, col), (_, vt)) in cv.into_iter().zip(tv.iter()) {
+                new_variants.push((name, reshape_to_schema_type(col, vt)?));
+            }
+            LogicalColumn::Union {
+                tags,
+                variants: new_variants,
+            }
+        }
+        // No promotion applicable — return unchanged.
+        (_, other) => other,
+    })
+}
 
 pub use candidates::{LeafCandidate, data_candidates, structural_candidates};
 pub use picker::{measure_pipeline, pick_best_leaf};
@@ -121,11 +206,21 @@ impl Default for OptimizerConfig {
 /// 2. Call [`Optimizer::optimize`] with `(name, LogicalType, LogicalColumn)` triples.
 /// 3. Use the returned `Schema` to construct a `HeliumWriter`.
 ///
-/// # Note on dict types
+/// # Automatic dictionary promotion
 ///
-/// The optimizer does not automatically promote `Primitive` columns to `Dictionary`.
-/// If you want dictionary encoding, build a `LogicalColumn::Dictionary` first
-/// (use `LogicalColumn::dict_encode_primitive` or `dict_encode_utf8` to prepare it).
+/// For low-cardinality **data** leaves — `Utf8` columns and integer
+/// `Primitive` columns (I8..I64 / U8..U64) — the optimizer automatically
+/// considers a `Dictionary<T>` representation, mirroring what Parquet/ORC do.
+/// The decision is measurement-based: a cheap distinct-count gate
+/// (`distinct ≤ min(rows/2, 65_536)`) decides whether dict has any chance, and
+/// only then does the optimizer encode both the plain and dict variants and
+/// keep whichever is smaller (plain on a tie). Floats are excluded — pcodec
+/// already covers low-cardinality numerics, so a dict rarely wins there. See
+/// `recursive::optimize_type`.
+///
+/// You can still build a `LogicalColumn::Dictionary` explicitly (via
+/// `LogicalColumn::dict_encode_primitive` / `dict_encode_utf8`); the optimizer
+/// will optimize its leaves as before.
 pub struct Optimizer {
     registry: CoderRegistry,
     config: OptimizerConfig,

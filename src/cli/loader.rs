@@ -41,6 +41,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, bail};
+use helium::optimizer::reshape_to_schema_type;
 use helium::{ColumnData, DataType, LogicalColumn, LogicalType, Schema};
 
 /// A loaded dataset: column name, logical type, and data.
@@ -1036,11 +1037,11 @@ pub fn json_values_to_logical_column(
             })
         }
 
-        LogicalType::Dictionary { .. } => {
-            bail!(
-                "dict types are not directly loadable from JSON; \
-                 the optimizer or a pre-built dict pipeline is required"
-            )
+        LogicalType::Dictionary { inner } => {
+            // The optimizer can promote a column to Dictionary. Load the plain
+            // inner column from JSON, then dict-encode it to match the schema.
+            let inner_col = json_values_to_logical_column(values, inner)?;
+            Ok(reshape_to_schema_type(inner_col, lt)?)
         }
         // Semantic types: delegate to string parser.
         LogicalType::Decimal128 { .. }
@@ -1261,6 +1262,16 @@ pub fn strings_to_logical_column(
                     value: Box::new(LogicalColumn::Binary(blobs)),
                 })
             }
+            // Nullable<Dictionary<T>>: the optimizer can promote the inner of a
+            // nullable column. Load as Nullable<T> (T = the dict's inner), then
+            // dict-encode the inner via reshape.
+            LogicalType::Dictionary { inner: dict_inner } => {
+                let nullable_plain = LogicalType::Nullable {
+                    inner: dict_inner.clone(),
+                };
+                let plain = strings_to_logical_column(values, &nullable_plain, nulls)?;
+                Ok(reshape_to_schema_type(plain, lt)?)
+            }
             inner => bail!(
                 "unsupported nullable inner type for data loading: {:?} \
                  (only Primitive / Utf8 / Binary are supported for flat-file loading)",
@@ -1276,11 +1287,11 @@ pub fn strings_to_logical_column(
              use a Parquet source with a matching nested schema instead",
             lt
         ),
-        LogicalType::Dictionary { .. } => {
-            bail!(
-                "dict types are not directly loadable from flat files; \
-                 the optimizer or a pre-built dict pipeline is required"
-            )
+        LogicalType::Dictionary { inner } => {
+            // The optimizer can promote a column to Dictionary. Load the plain
+            // inner column then dict-encode it to match the schema.
+            let inner_col = strings_to_logical_column(values, inner, nulls)?;
+            Ok(reshape_to_schema_type(inner_col, lt)?)
         }
         // Semantic types: parse from string representation.
         LogicalType::Decimal128 { .. } => {

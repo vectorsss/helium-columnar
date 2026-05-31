@@ -545,7 +545,25 @@ fn avro_5g_mr_compression_report() {
             .expect("optimizer must handle all schema types")
     };
 
-    let he_opt_bytes = write_helium(&optimized_schema, &columns);
+    // The optimizer may promote low-cardinality columns to Dictionary; reshape
+    // the source columns to match the optimized schema before writing (this is
+    // what a real caller / the format adapters do).
+    let opt_columns: HashMap<String, LogicalColumn> = optimized_schema
+        .columns
+        .iter()
+        .map(|spec| {
+            (
+                spec.name.clone(),
+                helium::optimizer::reshape_to_schema_type(
+                    columns[&spec.name].clone(),
+                    &spec.logical_type,
+                )
+                .expect("reshape to optimized schema type"),
+            )
+        })
+        .collect();
+
+    let he_opt_bytes = write_helium(&optimized_schema, &opt_columns);
     let he_opt_size = he_opt_bytes.len();
     eprintln!("helium-optimized:     {:>9} bytes", he_opt_size);
 
@@ -557,10 +575,12 @@ fn avro_5g_mr_compression_report() {
             HeliumReader::new(cursor, &registry).expect("HeliumReader::new (optimized)");
         let decoded = reader.read_all().expect("read_all (optimized)");
 
-        for col_spec in &helium_schema.columns {
-            let original = &columns[&col_spec.name];
+        for col_spec in &optimized_schema.columns {
+            // Compare against the reshaped (possibly dict-encoded) column so a
+            // promoted Dictionary column is matched against a Dictionary.
+            let expected = &opt_columns[&col_spec.name];
             let roundtripped = &decoded[&col_spec.name];
-            columns_equal(original, roundtripped, &col_spec.name)
+            columns_equal(expected, roundtripped, &col_spec.name)
                 .expect("round-trip correctness failed for helium-optimized");
         }
         eprintln!("  [round-trip optimized: PASS]");
