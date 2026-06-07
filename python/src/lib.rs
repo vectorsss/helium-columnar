@@ -492,12 +492,7 @@ fn logical_column_to_python(py: Python<'_>, col: LogicalColumn) -> PyResult<PyOb
         }
         // Nested / nullable / dict / semantic types are bridged to Python via
         // the Arrow path (`read_table`), not the flat dict API.
-        LogicalColumn::ArrayOf { .. }
-        | LogicalColumn::ArrayOfUtf8 { .. }
-        | LogicalColumn::NullablePrim { .. }
-        | LogicalColumn::NullableUtf8 { .. }
-        | LogicalColumn::NullableBinary { .. }
-        | LogicalColumn::Dictionary { .. }
+        LogicalColumn::Dictionary { .. }
         | LogicalColumn::Struct { .. }
         | LogicalColumn::List { .. }
         | LogicalColumn::Map { .. }
